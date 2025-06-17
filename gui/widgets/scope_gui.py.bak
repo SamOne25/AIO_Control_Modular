@@ -4,7 +4,6 @@
 scope_gui.py
 
 Tkinter GUI widget for oscilloscope controls and live plotting.
-All initial device queries are caught to prevent startup timeouts.
 """
 
 import tkinter as tk
@@ -12,7 +11,7 @@ from tkinter import ttk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from utils.helpers import format_record_length, logger
+from utils.helpers import format_record_length
 
 
 class ScopeGUI(tk.LabelFrame):
@@ -20,25 +19,9 @@ class ScopeGUI(tk.LabelFrame):
     Frame containing controls and plot for the oscilloscope.
     """
 
-    DEFAULTS = {
-        "trigger_source": "CH1",
-        "trigger_level": 0.0,
-        "record_length": 2500,
-    }
-
     def __init__(self, master, scope_ctrl, *args, **kwargs):
         super().__init__(master, text="Oscilloscope", *args, **kwargs)
         self.ctrl = scope_ctrl
-
-        # Attempt to fetch initial settings, fallback on defaults
-        try:
-            settings = self.ctrl.get_settings()
-        except Exception as e:
-            logger.error(f"Could not query scope settings at init: {e}")
-            settings = ScopeGUI.DEFAULTS.copy()
-
-        self.initial_settings = settings
-
         self._build_widgets()
         self._build_plot()
 
@@ -54,9 +37,9 @@ class ScopeGUI(tk.LabelFrame):
             state="readonly",
         ).grid(row=0, column=1, sticky="w")
 
-        # Trigger source
+        # Trigger controls
         tk.Label(self, text="Trig Src:").grid(row=1, column=0, sticky="e")
-        self.trig_src_var = tk.StringVar(value=self.initial_settings.get("trigger_source"))
+        self.trig_src_var = tk.StringVar(value=self.ctrl.get_settings().get("trigger_source", "CH1"))
         ttk.Combobox(
             self,
             textvariable=self.trig_src_var,
@@ -65,61 +48,45 @@ class ScopeGUI(tk.LabelFrame):
             state="readonly",
         ).grid(row=1, column=1, sticky="w")
 
-        # Trigger level
         tk.Label(self, text="Trig Level (V):").grid(row=1, column=2, sticky="e")
-        self.trig_level_var = tk.DoubleVar(value=self.initial_settings.get("trigger_level"))
+        self.trig_level_var = tk.DoubleVar(value=self.ctrl.get_settings().get("trigger_level", 0.0))
         ttk.Entry(self, textvariable=self.trig_level_var, width=8).grid(row=1, column=3, sticky="w")
         ttk.Button(self, text="Set Trigger", command=self._apply_trigger).grid(row=1, column=4, padx=5)
 
         # Record length display
-        rec_len = self.initial_settings.get("record_length")
+        rec = self.ctrl.get_settings().get("record_length", 2500)
         tk.Label(self, text="Rec Len:").grid(row=2, column=0, sticky="e")
-        self.rec_label = tk.Label(self, text=format_record_length(rec_len))
+        self.rec_label = tk.Label(self, text=format_record_length(rec))
         self.rec_label.grid(row=2, column=1, sticky="w")
 
         # Acquire button
         ttk.Button(self, text="Acquire", command=self._acquire).grid(row=2, column=3, columnspan=2, pady=5)
 
     def _build_plot(self):
-        # Matplotlib Figure setup
+        # Matplotlib Figure
         self.fig, self.ax = plt.subplots(figsize=(5, 2.5))
         self.ax.set_title("Scope Waveform")
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Voltage (V)")
         self.line, = self.ax.plot([], [], lw=1)
 
-        # Embed plot into Tkinter
+        # Embed in Tkinter
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().grid(row=3, column=0, columnspan=5, pady=5)
 
     def _apply_trigger(self):
-        """
-        Apply trigger settings when user clicks button.
-        """
         ch = self.channel_var.get()
         lvl = self.trig_level_var.get()
-        try:
-            self.ctrl.set_trigger(ch, lvl)
-        except Exception as e:
-            logger.error(f"Failed to set trigger: {e}")
+        self.ctrl.set_trigger(ch, lvl)
 
     def _acquire(self):
-        """
-        Acquire a waveform and update plot & record-length display.
-        """
-        try:
-            meas = self.ctrl.read_waveform(channel=self.channel_var.get())
-            self._update_plot(meas.time, meas.voltage)
-
-            rec_len = meas.params.get("record_length", len(meas.voltage))
-            self.rec_label.config(text=format_record_length(rec_len))
-        except Exception as e:
-            logger.error(f"Failed to acquire waveform: {e}")
+        meas = self.ctrl.read_waveform(channel=self.channel_var.get())
+        self._update_plot(meas.time, meas.voltage)
+        # update rec len display in case changed
+        rec = meas.params.get("record_length", len(meas.voltage))
+        self.rec_label.config(text=format_record_length(rec))
 
     def _update_plot(self, time_axis, voltage):
-        """
-        Update the Matplotlib line with new data.
-        """
         self.line.set_data(time_axis, voltage)
         self.ax.set_xlim(time_axis.min(), time_axis.max())
         self.ax.set_ylim(voltage.min(), voltage.max())
