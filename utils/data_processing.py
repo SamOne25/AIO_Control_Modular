@@ -1,50 +1,27 @@
-# utils/data_processing.py
-
-"""
-data_processing.py
-
-Signal- and spectrum-processing functions for post-capture analysis.
-"""
-
 import numpy as np
 
+def normalize_data(data):
+    """Normiert ein 1D-Array auf den Bereich 0...1."""
+    data = np.array(data)
+    min_val = np.min(data)
+    max_val = np.max(data)
+    if max_val > min_val:
+        return (data - min_val) / (max_val - min_val)
+    else:
+        return data * 0  # alles auf Null, falls keine Variation
 
-def find_peaks(signal: np.ndarray, threshold: float) -> np.ndarray:
-    """
-    Simple local-maximum peak finder.
-    Returns indices where signal[i] > signal[i-1] and signal[i] > signal[i+1]
-    and signal[i] >= threshold.
-    """
-    peaks = []
-    for i in range(1, len(signal) - 1):
-        if signal[i] > signal[i - 1] and signal[i] > signal[i + 1] and signal[i] >= threshold:
-            peaks.append(i)
-    return np.array(peaks, dtype=int)
+def scale_to_unit(data, unit="V"):
+    """Skaliert Werte in eine andere Einheit (z. B. mV, µV, ...)."""
+    factor = 1.0
+    if unit == "mV":
+        factor = 1e3
+    elif unit == "uV":
+        factor = 1e6
+    return np.array(data) * factor
 
-
-def smooth_signal(signal: np.ndarray, window_size: int = 5) -> np.ndarray:
-    """
-    Moving-average smoothing.
-    """
-    if window_size < 1:
-        return signal
-    kernel = np.ones(window_size) / window_size
-    return np.convolve(signal, kernel, mode="same")
-
-
-def normalize(signal: np.ndarray) -> np.ndarray:
-    """
-    Normalize an array to the range [0, 1].
-    """
-    min_val = np.min(signal)
-    max_val = np.max(signal)
-    if max_val == min_val:
-        return np.zeros_like(signal)
-    return (signal - min_val) / (max_val - min_val)
-
-
-def dbm_to_mw(p_dbm: np.ndarray) -> np.ndarray:
-    """
-    Convert power values from dBm to mW.
-    """
-    return 10 ** (p_dbm / 10.0)
+def smooth(data, window_size=5):
+    """Gleitet Mittelwert (Moving Average) über die Daten."""
+    data = np.array(data)
+    if len(data) < window_size:
+        return data
+    return np.convolve(data, np.ones(window_size)/window_size, mode='valid')

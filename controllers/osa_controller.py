@@ -1,73 +1,40 @@
-"""
-osa_controller.py
-
-Manages the Optical Spectrum Analyzer (OSA) via SCPI over VISA.
-"""
-
 import pyvisa
+import re
 import numpy as np
 
-
-class OSASpectrum:
-    """
-    Holds a single OSA sweep result.
-    """
-    def __init__(self, wavelengths: np.ndarray, powers_dbm: np.ndarray, params: dict):
-        self.wavelengths = wavelengths   # in nanometers
-        self.powers_dbm = powers_dbm     # in dBm
-        self.params = params             # Dict of OSA settings at sweep time
-
-
 class OSAController:
-    """
-    Controller for an optical spectrum analyzer (e.g., Anritsu MS9740A).
-    """
+    def __init__(self):
+        self.rm = None
+        self.osa = None
 
-    def __init__(self, address: str):
-        self.rm = pyvisa.ResourceManager()
-        self.inst = self.rm.open_resource(address)
-        self.inst.write(":SWE:TIME:AUTO ON")    # Auto sweep time
-        self.inst.write(":UNIT:POW DBM")        # Power unit
-        self.inst.write(":SENS:WAV:RANG:MODE MAN")  # Manual wavelength range
+    def connect(self, ip):
+        if self.rm is None:
+            self.rm = pyvisa.ResourceManager()
+        self.osa = self.rm.open_resource(f"TCPIP0::{ip}::INSTR")
+        self.osa.timeout = 300_000
+        idn = self.osa.query("*IDN?")
+        return idn
 
-    def configure_sweep(self, start_nm: float, stop_nm: float, resolution_nm: float) -> None:
-        """
-        Set sweep parameters: start/stop wavelength and resolution.
-        """
-        self.inst.write(f":SENS:WAV:START {start_nm}NM")
-        self.inst.write(f":SENS:WAV:STOP {stop_nm}NM")
-        self.inst.write(f":SENS:WAV:RES {resolution_nm}NM")
+    def disconnect(self):
+        try:
+            if self.osa:
+                self.osa.write("SST")
+                self.osa.write("SND ON")
+                self.osa.close()
+        except Exception:
+            pass
+        self.osa = None
 
-    def measure_spectrum(self) -> OSASpectrum:
-        """
-        Trigger a sweep and read back the wavelength vs. power data.
-        """
-        # Trigger sweep
-        self.inst.write(":INIT:IMM")
-        self.inst.query("*OPC?")  # wait until done
+    def write(self, cmd):
+        if self.osa:
+            self.osa.write(cmd)
 
-        # Read trace as ASCII for simplicity
-        raw = self.inst.query_ascii_values("TRAC:DATA? TRACE1", separator=",")
-        powers = np.array(raw)
+    def query(self, cmd):
+        if self.osa:
+            return self.osa.query(cmd)
+        return None
 
-        # Query axis data
-        start = float(self.inst.query(":SENS:WAV:START?"))
-        stop = float(self.inst.query(":SENS:WAV:STOP?"))
-        points = powers.size
-        wavelengths = np.linspace(start, stop, points)
-
-        params = {
-            "start_nm": start,
-            "stop_nm": stop,
-            "resolution_nm": float(self.inst.query(":SENS:WAV:RES?")),
-            "unit": self.inst.query(":UNIT:POW?").strip(),
-        }
-
-        return OSASpectrum(wavelengths, powers, params)
-
-    def close(self) -> None:
-        """
-        Close the VISA session.
-        """
-        self.inst.close()
-        self.rm.close()
+    def query_binary(self, cmd):
+        if self.osa:
+            return self.osa.query_binary_values(cmd)
+        return None
