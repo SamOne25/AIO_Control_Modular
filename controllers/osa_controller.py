@@ -1,5 +1,4 @@
 import pyvisa
-import re
 import numpy as np
 
 class OSAController:

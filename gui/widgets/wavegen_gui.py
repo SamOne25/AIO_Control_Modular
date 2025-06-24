@@ -7,6 +7,8 @@ import math
 from controllers.wavegen_controller import WavegenController
 from utils.tooltip import Tooltip
 
+
+
 class WavegenGUI(ttk.Frame):
     def __init__(self, parent, controller=None):
         super().__init__(parent)
@@ -19,7 +21,7 @@ class WavegenGUI(ttk.Frame):
         self.delay_ns_var = tk.DoubleVar(value=0.0)
         self.func_choices = ["SINusoid", "SQUare", "RAMP", "PULSe", "TRIangle", "NOISe", "PRBS", "DC"]
         self.func_var_ch = {1: tk.StringVar(value="PULSe"), 2: tk.StringVar(value="PULSe")}
-        self._build_gui()
+               
 
     def _build_gui(self):
         main_frame = tk.Frame(self)
