@@ -12,7 +12,7 @@ class MainGUI(ttk.Frame):
 
         scope_tab = ScopeGUI(notebook, controller=scope_ctrl)
         wavegen_tab = WavegenGUI(notebook, controller=wavegen_ctrl)
-        osa_tab = OSAGUI(notebook, controller=osa_ctrl)
+        osa_tab     = OSAGUI(notebook, controller=osa_ctrl, wavegen_controller=wavegen_ctrl)
 
         notebook.add(scope_tab, text="Oscilloscope")
         notebook.add(wavegen_tab, text="Wavegen")

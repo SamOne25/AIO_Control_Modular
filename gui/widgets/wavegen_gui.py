@@ -2,104 +2,146 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
 import time
-import math
 
 from controllers.wavegen_controller import WavegenController
+from controllers.osa_controller import OSAController
 from utils.tooltip import Tooltip
 
-
-
 class WavegenGUI(ttk.Frame):
-    def __init__(self, parent, controller=None):
+    def __init__(self, parent, controller=None, osa_controller: OSAController=None):
         super().__init__(parent)
         self.controller = controller if controller else WavegenController()
+        self.osa_ctrl = osa_controller  # optional OSAController for integrated scan
         self.generator_on = {1: False, 2: False}
         self.current_frequency = {1: 0.0, 2: 0.0}
         self.entries_ch = {1: {}, 2: {}}
         self.independent = True
         self.phase_deg = 0.0
         self.delay_ns_var = tk.DoubleVar(value=0.0)
-        self.func_choices = ["SINusoid", "SQUare", "RAMP", "PULSe", "TRIangle", "NOISe", "PRBS", "DC"]
-        self.func_var_ch = {1: tk.StringVar(value="PULSe"), 2: tk.StringVar(value="PULSe")}
-               
+        self.func_choices = [
+            "SINusoid", "SQUare", "RAMP", "PULSe",
+            "TRIangle", "NOISe", "PRBS", "DC"
+        ]
+        self.func_var_ch = {
+            1: tk.StringVar(value="PULSe"),
+            2: tk.StringVar(value="PULSe")
+        }
+        self._build_gui()
 
     def _build_gui(self):
-        main_frame = tk.Frame(self)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        top_frame = tk.Frame(main_frame)
-        top_frame.pack(fill="x", pady=(0, 10))
-        tk.Label(top_frame, text="IP Address:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.ip_entry = tk.Entry(top_frame)
+        main = tk.Frame(self)
+        main.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Top row: IP, Connect, Mode
+        top = tk.Frame(main)
+        top.pack(fill="x", pady=(0,10))
+        tk.Label(top, text="IP Address:").grid(row=0, column=0, sticky="e", padx=5)
+        self.ip_entry = tk.Entry(top, width=15)
         self.ip_entry.insert(0, "192.168.1.122")
-        self.ip_entry.grid(row=0, column=1, padx=5, pady=2)
-        Tooltip(self.ip_entry, "Valid IP address, e.g. 192.168.1.122")
+        self.ip_entry.grid(row=0, column=1, padx=5)
+        Tooltip(self.ip_entry, "Valid IP, e.g. 192.168.1.122")
+        self.connect_button = tk.Button(top, text="Connect", bg="red",
+                                        command=self.toggle_connection)
+        self.connect_button.grid(row=0, column=2, padx=5)
+        self.mode_button = tk.Button(top, text="Independent", width=12,
+                                     command=self.toggle_mode)
+        self.mode_button.grid(row=0, column=3, padx=5)
 
-        self.connect_button = tk.Button(top_frame, text="Connect", bg="red", command=self.toggle_connection)
-        self.connect_button.grid(row=0, column=2, padx=5, pady=2)
-
-        self.mode_button = tk.Button(top_frame, text="Independent", command=self.toggle_mode, width=12)
-        self.mode_button.grid(row=0, column=3, padx=5, pady=2)
-
-        self.notebook = ttk.Notebook(main_frame)
+        # Notebook for two channels
+        self.notebook = ttk.Notebook(main)
         self.notebook.pack(fill="both", expand=True)
-
         self.ch1_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.ch1_frame, text="Channel 1")
         self.create_channel_tab(1, self.ch1_frame)
-
         self.ch2_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.ch2_frame, text="Channel 2")
         self.create_channel_tab(2, self.ch2_frame)
 
-        self.coupled_subframe = tk.LabelFrame(self.ch1_frame, text="Coupled Mode Settings")
-        self.coupled_subframe.grid(row=6, column=0, columnspan=4, pady=(10, 0), padx=5, sticky="ew")
-
-        tk.Label(self.coupled_subframe, text="Delay (ns):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.delay_spin = tk.Spinbox(self.coupled_subframe, from_=0.0, to=1e6, increment=0.1,
-                                     textvariable=self.delay_ns_var, width=10, command=self.update_phase_from_delay)
+        # Coupled mode subframe (in ch1)
+        self.coupled_subframe = tk.LabelFrame(
+            self.ch1_frame, text="Coupled Mode Settings", padx=5, pady=5
+        )
+        self.coupled_subframe.grid(row=6, column=0, columnspan=4,
+                                   sticky="ew", pady=(10,0), padx=5)
+        tk.Label(self.coupled_subframe, text="Delay (ns):").grid(
+            row=0, column=0, sticky="e", padx=5, pady=2
+        )
+        self.delay_spin = tk.Spinbox(
+            self.coupled_subframe, from_=0.0, to=1e6, increment=0.1,
+            textvariable=self.delay_ns_var, width=10,
+            command=self.update_phase_from_delay
+        )
         self.delay_spin.grid(row=0, column=1, padx=5, pady=2)
-        Tooltip(self.delay_spin, "Delay between channels in nanoseconds (0.0–1e6 ns)")
-        tk.Label(self.coupled_subframe, text="ns").grid(row=0, column=2, sticky="w")
-
-        tk.Label(self.coupled_subframe, text="Phase Shift (°):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        Tooltip(self.delay_spin, "Delay between channels in ns (0–1e6)")
+        tk.Label(self.coupled_subframe, text="ns").grid(
+            row=0, column=2, sticky="w"
+        )
+        tk.Label(self.coupled_subframe, text="Phase Shift (°):").grid(
+            row=1, column=0, sticky="e", padx=5, pady=2
+        )
         self.phase_label = tk.Label(self.coupled_subframe, text="0.00")
         self.phase_label.grid(row=1, column=1, padx=5, pady=2)
-        tk.Label(self.coupled_subframe, text="°").grid(row=1, column=2, sticky="w")
-
-        self.ch2_control_button = tk.Button(self.coupled_subframe, text="Channel 2 OFF", bg="red", command=lambda: self.toggle_generator(2))
-        self.ch2_control_button.grid(row=2, column=0, columnspan=3, pady=(5, 5))
+        tk.Label(self.coupled_subframe, text="°").grid(
+            row=1, column=2, sticky="w"
+        )
+        self.ch2_control_button = tk.Button(
+            self.coupled_subframe, text="Channel 2 OFF", bg="red",
+            command=lambda: self.toggle_generator(2)
+        )
+        self.ch2_control_button.grid(row=2, column=0, columnspan=3,
+                                     pady=(5,5))
         self.coupled_subframe.grid_remove()
 
-        scan_frame = tk.LabelFrame(main_frame, text="Scan Controls")
-        scan_frame.pack(fill="x", pady=(10, 0))
-        tk.Label(scan_frame, text="Start Frequency (Hz):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.start_entry = tk.Entry(scan_frame)
+        # Scan Controls
+        scan_frame = tk.LabelFrame(main, text="Scan Controls", padx=5, pady=5)
+        scan_frame.pack(fill="x", pady=(10,0))
+        tk.Label(scan_frame, text="Start Freq (Hz):").grid(
+            row=0, column=0, sticky="e", padx=5, pady=2
+        )
+        self.start_entry = tk.Entry(scan_frame, width=10)
         self.start_entry.insert(0, "4000")
         self.start_entry.grid(row=0, column=1, padx=5, pady=2)
-        Tooltip(self.start_entry, "Start frequency in Hz (float, ≥ 0.1 Hz)")
-        tk.Label(scan_frame, text="End Frequency (Hz):").grid(row=0, column=2, sticky="e", padx=5, pady=2)
-        self.end_entry = tk.Entry(scan_frame)
+        Tooltip(self.start_entry, "Start frequency in Hz (≥0.1)")
+        tk.Label(scan_frame, text="End Freq (Hz):").grid(
+            row=0, column=2, sticky="e", padx=5, pady=2
+        )
+        self.end_entry = tk.Entry(scan_frame, width=10)
         self.end_entry.insert(0, "5000")
         self.end_entry.grid(row=0, column=3, padx=5, pady=2)
-        Tooltip(self.end_entry, "End frequency in Hz (float, ≥ start frequency)")
-        tk.Label(scan_frame, text="Step (Hz):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        self.step_entry = tk.Entry(scan_frame)
+        Tooltip(self.end_entry, "End frequency in Hz (≥ start)")
+        tk.Label(scan_frame, text="Step (Hz):").grid(
+            row=1, column=0, sticky="e", padx=5, pady=2
+        )
+        self.step_entry = tk.Entry(scan_frame, width=10)
         self.step_entry.insert(0, "1")
         self.step_entry.grid(row=1, column=1, padx=5, pady=2)
-        Tooltip(self.step_entry, "Step increment in Hz (float, > 0)")
-        tk.Label(scan_frame, text="Pause (s):").grid(row=1, column=2, sticky="e", padx=5, pady=2)
-        self.pause_entry = tk.Entry(scan_frame)
+        Tooltip(self.step_entry, "Step in Hz (>0)")
+        tk.Label(scan_frame, text="Pause (s):").grid(
+            row=1, column=2, sticky="e", padx=5, pady=2
+        )
+        self.pause_entry = tk.Entry(scan_frame, width=10)
         self.pause_entry.insert(0, "0.5")
         self.pause_entry.grid(row=1, column=3, padx=5, pady=2)
-        Tooltip(self.pause_entry, "Pause between steps in seconds (float, ≥ 0)")
-        tk.Button(scan_frame, text="Start Scan", command=self.start_scan).grid(row=2, column=0, pady=5, padx=5)
-        tk.Button(scan_frame, text="Stop Scan", command=self.stop_scan).grid(row=2, column=1, pady=5, padx=5)
-        tk.Button(scan_frame, text="Resume Scan", command=self.resume_scan).grid(row=2, column=2, pady=5, padx=5)
+        Tooltip(self.pause_entry, "Pause between steps in s (≥0)")
+        tk.Label(scan_frame, text="Meas WL (nm):").grid(
+            row=2, column=0, sticky="e", padx=5, pady=2
+        )
+        self.osa_wl_entry = tk.Entry(scan_frame, width=10)
+        self.osa_wl_entry.insert(0, "1550")
+        self.osa_wl_entry.grid(row=2, column=1, padx=5, pady=2)
+        Tooltip(self.osa_wl_entry, "Wavelength for power-meter (nm)")
+        tk.Button(scan_frame, text="Start Scan", command=self.start_scan)\
+            .grid(row=3, column=0, padx=5, pady=5)
+        tk.Button(scan_frame, text="Stop Scan", command=self.stop_scan)\
+            .grid(row=3, column=1, padx=5, pady=5)
+        tk.Button(scan_frame, text="Resume Scan", command=self.resume_scan)\
+            .grid(row=3, column=2, padx=5, pady=5)
+
+        # Status
         self.status_label = tk.Label(self, text="Ready")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
-        self.update_mode()
 
-    # --- Alle Methoden 1:1 übernommen, Details wie im Original ---
+        self.update_mode()
 
     def toggle_connection(self):
         if self.controller.gen is None:
@@ -119,7 +161,7 @@ class WavegenGUI(ttk.Frame):
         else:
             try:
                 self.controller.disconnect()
-                self.status("Disconnected from generator")
+                self.status("Disconnected")
                 self.connect_button.config(text="Connect", bg="red")
                 self.gen_button1.config(text="Channel 1 OFF", bg="red")
                 self.gen_button2.config(text="Channel 2 OFF", bg="red")
@@ -129,22 +171,17 @@ class WavegenGUI(ttk.Frame):
 
     def toggle_mode(self):
         self.independent = not self.independent
-        text = "Independent" if self.independent else "Coupled"
-        self.mode_button.config(text=text)
+        self.mode_button.config(text="Independent" if self.independent else "Coupled")
         self.update_mode()
 
     def update_mode(self):
         if self.independent:
-            try:
-                self.notebook.add(self.ch2_frame, text="Channel 2")
-            except Exception:
-                pass
+            try: self.notebook.add(self.ch2_frame, text="Channel 2")
+            except: pass
             self.coupled_subframe.grid_remove()
         else:
-            try:
-                self.notebook.forget(self.ch2_frame)
-            except Exception:
-                pass
+            try: self.notebook.forget(self.ch2_frame)
+            except: pass
             self.coupled_subframe.grid()
 
     def create_channel_tab(self, chan, frame):
@@ -154,43 +191,62 @@ class WavegenGUI(ttk.Frame):
             ("Offset (V):", "2.5"),
             ("Pulse Width (ns):", "30")
         ]
-        for i, (label, default) in enumerate(labels):
-            tk.Label(frame, text=label).grid(row=i, column=0, sticky="e", padx=5, pady=2)
-            entry = tk.Entry(frame)
+        for i, (lbl, default) in enumerate(labels):
+            tk.Label(frame, text=lbl).grid(
+                row=i, column=0, sticky="e", padx=5, pady=2
+            )
+            entry = tk.Entry(frame, width=12)
             entry.insert(0, default)
             entry.grid(row=i, column=1, padx=5, pady=2)
-            self.entries_ch[chan][label] = entry
-            if label == "Frequency (Hz):":
-                Tooltip(entry, "Floating point, frequency in Hz (0.1–50e6)")
-            elif label == "Amplitude (Vpp):":
-                Tooltip(entry, "Floating point, amplitude in Vpp (0–10)")
-            elif label == "Offset (V):":
-                Tooltip(entry, "Floating point, offset in V (–5 to +5)")
-            elif label == "Pulse Width (ns):":
-                Tooltip(entry, "Floating point, pulse width in ns (≥ 1 ns, ≤ period)")
-        tk.Label(frame, text="Waveform:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
-        func_menu = ttk.OptionMenu(frame, self.func_var_ch[chan], self.func_var_ch[chan].get(), *self.func_choices)
+            self.entries_ch[chan][lbl] = entry
+            if lbl.startswith("Pulse Width"):
+                Tooltip(entry, "Pulse width in ns (integer)")
+        tk.Label(frame, text="Waveform:").grid(
+            row=4, column=0, sticky="e", padx=5, pady=2
+        )
+        func_menu = ttk.OptionMenu(frame,
+            self.func_var_ch[chan],
+            self.func_var_ch[chan].get(),
+            *self.func_choices
+        )
         func_menu.grid(row=4, column=1, padx=5, pady=2, sticky="ew")
-        Tooltip(func_menu, "Waveform options: SINusoid, SQUare, RAMP, PULSe, TRIangle, NOISe, PRBS, DC")
-        set_btn = tk.Button(frame, text=f"Channel {chan} SET", command=lambda c=chan: self.set_settings(c))
-        set_btn.grid(row=0, column=2, rowspan=1, padx=5, pady=2, sticky="ew")
-        gen_text = f"Channel {chan} OFF"
-        gen_btn = tk.Button(frame, text=gen_text, bg="red", command=lambda c=chan: self.toggle_generator(c))
-        gen_btn.grid(row=1, column=2, rowspan=1, padx=5, pady=2, sticky="ew")
-        if chan == 1:
-            self.gen_button1 = gen_btn
-        else:
-            self.gen_button2 = gen_btn
-        if chan == 2:
-            apply_btn = tk.Button(frame, text="Apply From Channel 1", command=self.apply_from_ch1)
-            apply_btn.grid(row=2, column=2, padx=5, pady=2, sticky="ew")
-        freq_adj_frame = tk.LabelFrame(frame, text="Adjust Frequency")
-        freq_adj_frame.grid(row=5, column=0, columnspan=3, pady=10, padx=5, sticky="ew")
-        steps = [-1000, -100, -10, -1, -0.1, -0.01, -0.001, 0.001, 0.01, 0.1, 1, 10, 100, 1000]
-        for i, step in enumerate(steps):
-            label = f"{step:+.3f}Hz" if abs(step) < 1 else f"{int(step):+}Hz"
-            btn = tk.Button(freq_adj_frame, text=label, width=8, command=lambda s=step, c=chan: self.adjust_frequency(c, s))
-            btn.grid(row=i // 7, column=i % 7, padx=2, pady=2)
+
+        tk.Button(frame, text=f"Channel {chan} SET",
+                  command=lambda c=chan: self.set_settings(c))\
+            .grid(row=0, column=2, padx=5, pady=2, sticky="ew")
+        gen_btn = tk.Button(frame, text=f"Channel {chan} OFF", bg="red",
+                            command=lambda c=chan: self.toggle_generator(c))
+        gen_btn.grid(row=1, column=2, padx=5, pady=2, sticky="ew")
+        if chan==1: self.gen_button1 = gen_btn
+        else:      self.gen_button2 = gen_btn
+
+        if chan==2:
+            tk.Button(frame, text="Apply From Channel 1",
+                      command=self.apply_from_ch1)\
+                .grid(row=2, column=2, padx=5, pady=2, sticky="ew")
+
+        # Adjust Frequency: paired up/down
+        adj = tk.LabelFrame(frame, text="Adjust Frequency", padx=5, pady=5)
+        adj.grid(row=5, column=0, columnspan=3,
+                 sticky="ew", padx=5, pady=10)
+        steps = [(-10,10),(-1,1),(-0.1,0.1),(-0.01,0.01),(-0.001,0.001)]
+        for col,(neg,pos) in enumerate(steps):
+            lbl_n = f"{int(neg):+}Hz" if abs(neg)>=1 else f"{neg:+.3f}Hz"
+            lbl_p = f"{int(pos):+}Hz" if abs(pos)>=1 else f"{pos:+.3f}Hz"
+            tk.Button(adj, text=lbl_n, width=8,
+                      command=lambda s=neg,c=chan: self.adjust_frequency(c,s))\
+                .grid(row=0, column=col, padx=2, pady=2)
+            tk.Button(adj, text=lbl_p, width=8,
+                      command=lambda s=pos,c=chan: self.adjust_frequency(c,s))\
+                .grid(row=1, column=col, padx=2, pady=2)
+        # ×10 and ÷10 stacked at end
+        col = len(steps)
+        tk.Button(adj, text="×10", width=8,
+                  command=lambda c=chan: self.scale_frequency(c,10))\
+            .grid(row=0, column=col, padx=(20,2), pady=2)
+        tk.Button(adj, text="÷10", width=8,
+                  command=lambda c=chan: self.scale_frequency(c,0.1))\
+            .grid(row=1, column=col, padx=(20,2), pady=2)
 
     def set_settings(self, channel):
         if self.controller.gen is None:
@@ -198,26 +254,27 @@ class WavegenGUI(ttk.Frame):
             if self.controller.gen is None:
                 return
         try:
-            freq = float(self.entries_ch[channel]["Frequency (Hz):"].get())
-            volt = float(self.entries_ch[channel]["Amplitude (Vpp):"].get())
-            offs = float(self.entries_ch[channel]["Offset (V):"].get())
-            width_ns = float(self.entries_ch[channel]["Pulse Width (ns):"].get())
-            width = width_ns * 1e-9
+            e = self.entries_ch[channel]
+            freq = float(e["Frequency (Hz):"].get())
+            volt = float(e["Amplitude (Vpp):"].get())
+            offs = float(e["Offset (V):"].get())
+            width_ns = int(round(float(e["Pulse Width (ns):"].get())))
             func = self.func_var_ch[channel].get()
+
             self.controller.write(f"SOUR{channel}:FUNC {func}")
             self.controller.write(f"SOUR{channel}:VOLT {volt}")
             self.controller.write(f"SOUR{channel}:VOLT:OFFS {offs}")
             if func == "PULSe":
-                self.controller.write(f"SOUR{channel}:PULS:WIDT {width}")
+                self.controller.write(f"SOUR{channel}:PULS:WIDT {width_ns*1e-9}")
             self.controller.write(f"OUTP{channel}:LOAD 50")
             self.controller.write(f"SOUR{channel}:FREQ {freq}")
             self.current_frequency[channel] = freq
-            self.status(f"Channel {channel} settings applied, Frequency: {freq:.6f} Hz")
-            if not self.independent and channel == 1:
+            self.status(f"Ch{channel} settings applied: {freq:.3f} Hz")
+            if not self.independent and channel==1:
                 self.update_phase_from_delay()
             self.update_output_buttons()
         except Exception as e:
-            messagebox.showerror("Error", f"Set settings failed (Channel {channel}): {e}")
+            messagebox.showerror("Error", f"Set settings failed (Ch{channel}): {e}")
 
     def read_settings(self, channel):
         if self.controller.gen is None:
@@ -226,71 +283,61 @@ class WavegenGUI(ttk.Frame):
                 return
         try:
             func = self.controller.query(f"SOUR{channel}:FUNC?").strip()
-            freq = self.controller.query(f"SOUR{channel}:FREQ?").strip()
-            volt = self.controller.query(f"SOUR{channel}:VOLT?").strip()
-            offs = self.controller.query(f"SOUR{channel}:VOLT:OFFS?").strip()
-            width_resp = self.controller.query(f"SOUR{channel}:PULS:WIDT?").strip()
-            width_ns = float(width_resp) * 1e9
-            self.entries_ch[channel]["Frequency (Hz):"].delete(0, tk.END)
-            self.entries_ch[channel]["Frequency (Hz):"].insert(0, self.format_value(freq))
-            self.entries_ch[channel]["Amplitude (Vpp):"].delete(0, tk.END)
-            self.entries_ch[channel]["Amplitude (Vpp):"].insert(0, self.format_value(volt))
-            self.entries_ch[channel]["Offset (V):"].delete(0, tk.END)
-            self.entries_ch[channel]["Offset (V):"].insert(0, self.format_value(offs))
-            self.entries_ch[channel]["Pulse Width (ns):"].delete(0, tk.END)
-            self.entries_ch[channel]["Pulse Width (ns):"].insert(0, self.format_value(width_ns))
+            freq = float(self.controller.query(f"SOUR{channel}:FREQ?").strip())
+            volt = float(self.controller.query(f"SOUR{channel}:VOLT?").strip())
+            offs = float(self.controller.query(f"SOUR{channel}:VOLT:OFFS?").strip())
+            width_resp = float(self.controller.query(f"SOUR{channel}:PULS:WIDT?").strip())
+            width_ns = int(round(width_resp * 1e9))
+
+            e = self.entries_ch[channel]
+            e["Frequency (Hz):"].delete(0, tk.END);    e["Frequency (Hz):"].insert(0, f"{freq:.3f}")
+            e["Amplitude (Vpp):"].delete(0, tk.END);    e["Amplitude (Vpp):"].insert(0, f"{volt:.3f}")
+            e["Offset (V):"].delete(0, tk.END);         e["Offset (V):"].insert(0, f"{offs:.3f}")
+            e["Pulse Width (ns):"].delete(0, tk.END);   e["Pulse Width (ns):"].insert(0, f"{width_ns}")
             self.func_var_ch[channel].set(func)
-            self.current_frequency[channel] = float(freq)
-            self.status(f"Channel {channel} settings read from device")
-            outp_state = self.controller.query(f"OUTP{channel}?").strip()
-            if outp_state in ("1", "ON"):
-                self.generator_on[channel] = True
-                if channel == 1:
-                    self.gen_button1.config(text="Channel 1 ON", bg="green")
-                else:
-                    self.gen_button2.config(text="Channel 2 ON", bg="green")
-            else:
-                self.generator_on[channel] = False
-                if channel == 1:
-                    self.gen_button1.config(text="Channel 1 OFF", bg="red")
-                else:
-                    self.gen_button2.config(text="Channel 2 OFF", bg="red")
-            if not self.independent and channel == 1:
+            self.current_frequency[channel] = freq
+
+            self.status(f"Ch{channel} settings read")
+            state = self.controller.query(f"OUTP{channel}?").strip()
+            is_on = state in ("1","ON")
+            btn = self.gen_button1 if channel==1 else self.gen_button2
+            btn.config(text=f"Channel {channel} {'ON' if is_on else 'OFF'}",
+                       bg="green" if is_on else "red")
+            self.generator_on[channel] = is_on
+            if not self.independent and channel==1:
                 self.update_phase_from_delay()
         except Exception as e:
-            messagebox.showerror("Error", f"Read settings failed (Channel {channel}): {e}")
+            messagebox.showerror("Error", f"Read settings failed (Ch{channel}): {e}")
 
     def apply_from_ch1(self):
         if self.controller.gen is None:
             return
         try:
-            freq = float(self.entries_ch[1]["Frequency (Hz):"].get())
-            volt = float(self.entries_ch[1]["Amplitude (Vpp):"].get())
-            offs = float(self.entries_ch[1]["Offset (V):"].get())
-            width_ns = float(self.entries_ch[1]["Pulse Width (ns):"].get())
-            width = width_ns * 1e-9
+            e1 = self.entries_ch[1]
+            freq = float(e1["Frequency (Hz):"].get())
+            volt = float(e1["Amplitude (Vpp):"].get())
+            offs = float(e1["Offset (V):"].get())
+            width_ns = int(round(float(e1["Pulse Width (ns):"].get())))
             func = self.func_var_ch[1].get()
-            self.entries_ch[2]["Frequency (Hz):"].delete(0, tk.END)
-            self.entries_ch[2]["Frequency (Hz):"].insert(0, self.format_value(freq))
-            self.entries_ch[2]["Amplitude (Vpp):"].delete(0, tk.END)
-            self.entries_ch[2]["Amplitude (Vpp):"].insert(0, self.format_value(volt))
-            self.entries_ch[2]["Offset (V):"].delete(0, tk.END)
-            self.entries_ch[2]["Offset (V):"].insert(0, self.format_value(offs))
-            self.entries_ch[2]["Pulse Width (ns):"].delete(0, tk.END)
-            self.entries_ch[2]["Pulse Width (ns):"].insert(0, self.format_value(width_ns))
+
+            e2 = self.entries_ch[2]
+            e2["Frequency (Hz):"].delete(0, tk.END);    e2["Frequency (Hz):"].insert(0, f"{freq:.3f}")
+            e2["Amplitude (Vpp):"].delete(0, tk.END);    e2["Amplitude (Vpp):"].insert(0, f"{volt:.3f}")
+            e2["Offset (V):"].delete(0, tk.END);         e2["Offset (V):"].insert(0, f"{offs:.3f}")
+            e2["Pulse Width (ns):"].delete(0, tk.END);   e2["Pulse Width (ns):"].insert(0, f"{width_ns}")
             self.func_var_ch[2].set(func)
+
             self.controller.write(f"SOUR2:FUNC {func}")
             self.controller.write(f"SOUR2:VOLT {volt}")
             self.controller.write(f"SOUR2:VOLT:OFFS {offs}")
-            if func == "PULSe":
-                self.controller.write(f"SOUR2:PULS:WIDT {width}")
+            self.controller.write(f"SOUR2:PULS:WIDT {width_ns*1e-9}")
             self.controller.write(f"OUTP2:LOAD 50")
             self.controller.write(f"SOUR2:FREQ {freq}")
             self.current_frequency[2] = freq
-            self.status("Channel 2 parameters applied from Channel 1")
+            self.status("Ch2 params applied from Ch1")
             self.update_output_buttons()
         except Exception as e:
-            messagebox.showerror("Error", f"Apply from Channel 1 failed: {e}")
+            messagebox.showerror("Error", f"Apply failed: {e}")
 
     def toggle_generator(self, channel):
         if self.controller.gen is None:
@@ -298,130 +345,116 @@ class WavegenGUI(ttk.Frame):
             if self.controller.gen is None:
                 return
         try:
-            if not self.generator_on[channel]:
-                self.controller.write(f"OUTP{channel} ON")
-                self.generator_on[channel] = True
-                if channel == 1:
-                    self.gen_button1.config(text="Channel 1 ON", bg="green")
-                else:
-                    self.gen_button2.config(text="Channel 2 ON", bg="green")
-                self.status(f"Channel {channel} ON")
-            else:
-                self.controller.write(f"OUTP{channel} OFF")
-                self.generator_on[channel] = False
-                if channel == 1:
-                    self.gen_button1.config(text="Channel 1 OFF", bg="red")
-                else:
-                    self.gen_button2.config(text="Channel 2 OFF", bg="red")
-                self.status(f"Channel {channel} OFF")
+            is_on = not self.generator_on[channel]
+            cmd = "ON" if is_on else "OFF"
+            self.controller.write(f"OUTP{channel} {cmd}")
+            btn = self.gen_button1 if channel==1 else self.gen_button2
+            btn.config(text=f"Channel {channel} {cmd}",
+                       bg="green" if is_on else "red")
+            self.generator_on[channel] = is_on
+            self.status(f"Channel {channel} {cmd}")
         except Exception as e:
-            messagebox.showerror("Error", f"Generator toggle error (Channel {channel}): {e}")
+            messagebox.showerror("Error", f"Toggle error (Ch{channel}): {e}")
 
     def update_output_buttons(self):
-        for channel in (1, 2):
+        for ch in (1,2):
             try:
-                outp_state = self.controller.query(f"OUTP{channel}?").strip()
-                if outp_state in ("1", "ON"):
-                    self.generator_on[channel] = True
-                    if channel == 1:
-                        self.gen_button1.config(text="Channel 1 ON", bg="green")
-                    else:
-                        self.gen_button2.config(text="Channel 2 ON", bg="green")
-                else:
-                    self.generator_on[channel] = False
-                    if channel == 1:
-                        self.gen_button1.config(text="Channel 1 OFF", bg="red")
-                    else:
-                        self.gen_button2.config(text="Channel 2 OFF", bg="red")
+                state = self.controller.query(f"OUTP{ch}?").strip()
+                is_on = state in ("1","ON")
+                btn = self.gen_button1 if ch==1 else self.gen_button2
+                btn.config(text=f"Channel {ch} {'ON' if is_on else 'OFF'}",
+                           bg="green" if is_on else "red")
+                self.generator_on[ch] = is_on
             except:
                 pass
 
     def adjust_frequency(self, channel, step):
         try:
             current = float(self.entries_ch[channel]["Frequency (Hz):"].get())
-            new_freq = current + step
+            new_f = current + step
+            if new_f > 30e6:
+                raise ValueError("Max freq 30 MHz exceeded")
             self.entries_ch[channel]["Frequency (Hz):"].delete(0, tk.END)
-            self.entries_ch[channel]["Frequency (Hz):"].insert(0, self.format_value(new_freq))
-            if self.controller.gen is not None:
-                self.controller.write(f"SOUR{channel}:FREQ {new_freq}")
-                self.current_frequency[channel] = new_freq
-                self.status(f"Channel {channel} frequency adjusted to {new_freq:.6f} Hz")
-                if not self.independent and channel == 1:
+            self.entries_ch[channel]["Frequency (Hz):"].insert(0, f"{new_f:.3f}")
+            if self.controller.gen:
+                self.controller.write(f"SOUR{channel}:FREQ {new_f}")
+                self.current_frequency[channel] = new_f
+                self.status(f"Ch{channel} freq adjusted to {new_f:.3f} Hz")
+                if not self.independent and channel==1:
                     self.update_phase_from_delay()
         except Exception as e:
-            messagebox.showerror("Error", f"Adjust frequency failed (Channel {channel}): {e}")
+            messagebox.showerror("Error", f"Adjust freq failed (Ch{channel}): {e}")
+
+    def scale_frequency(self, channel, factor):
+        try:
+            current = float(self.entries_ch[channel]["Frequency (Hz):"].get())
+            new_f = current * factor
+            if new_f > 30e6:
+                messagebox.showerror("Error", ">30 MHz not allowed")
+                return
+            self.entries_ch[channel]["Frequency (Hz):"].delete(0, tk.END)
+            self.entries_ch[channel]["Frequency (Hz):"].insert(0, f"{new_f:.3f}")
+            if self.controller.gen:
+                self.controller.write(f"SOUR{channel}:FREQ {new_f}")
+                self.current_frequency[channel] = new_f
+                self.status(f"Ch{channel} freq set to {new_f:.3f} Hz")
+        except Exception as e:
+            messagebox.showerror("Error", f"Scale freq failed (Ch{channel}): {e}")
 
     def update_phase_from_delay(self):
         try:
             delay_ns = self.delay_ns_var.get()
-            freq_hz = self.current_frequency[1]
-            phase = (delay_ns * 1e-9) * freq_hz * 360.0
-            phase = phase % 360.0
+            freq_hz  = self.current_frequency[1]
+            phase = (delay_ns*1e-9)*freq_hz*360.0 % 360.0
             self.phase_deg = phase
             self.phase_label.config(text=f"{phase:.2f}")
-            if self.controller.gen is not None:
+            if self.controller.gen:
                 self.controller.write(f"SOUR2:PHASe {phase}")
         except Exception as e:
             messagebox.showerror("Error", f"Phase update failed: {e}")
 
     def start_scan(self):
-        if self.controller.gen is None:
-            self.toggle_connection()
-            if self.controller.gen is None:
-                return
         try:
-            f_start = float(self.start_entry.get())
-            f_end = float(self.end_entry.get())
-            f_step = float(self.step_entry.get())
+            f0    = float(self.start_entry.get())
+            f1    = float(self.end_entry.get())
+            step  = float(self.step_entry.get())
             pause = float(self.pause_entry.get())
+            wl    = float(self.osa_wl_entry.get())
         except Exception as e:
-            messagebox.showerror("Error", f"Invalid scan parameters: {e}")
+            messagebox.showerror("Error", f"Invalid scan params: {e}")
             return
 
-        def scan_thread():
-            self.current_frequency[1] = f_start
-            self.scan_running = True
-            self.scan_paused = False
-            while self.scan_running and self.current_frequency[1] <= f_end:
-                if not self.scan_paused:
-                    self.controller.write(f"SOUR1:FREQ {self.current_frequency[1]}")
-                    if not self.independent:
-                        self.update_phase_from_delay()
-                    self.status(f"Scan Ch1: {self.current_frequency[1]:.6f} Hz")
-                    time.sleep(pause)
-                    self.current_frequency[1] += f_step
-                else:
-                    time.sleep(0.1)
-            self.status("Scan completed")
-
-        threading.Thread(target=scan_thread, daemon=True).start()
+        def worker():
+            results = []
+            f = f0
+            while f <= f1:
+                # set wavegen
+                self.controller.write(f"SOUR1:FREQ {f}")
+                time.sleep(pause)
+                # measure OSA if available
+                if self.osa_ctrl and getattr(self.osa_ctrl, "osa", None):
+                    osa = self.osa_ctrl.osa
+                    osa.write(f"PWR {wl}")
+                    osa.query("*OPC?")
+                    p = float(osa.query("PWRR?"))
+                    results.append((f, p))
+                f += step
+            if results:
+                mf, mp = max(results, key=lambda x: x[1])
+                messagebox.showinfo("Scan done",
+                    f"Max {mp:.2f} dBm at {mf:.3f} Hz")
+        threading.Thread(target=worker, daemon=True).start()
 
     def stop_scan(self):
-        try:
-            self.scan_running = False
-            self.status("Scan stopped")
-        except:
-            pass
+        self.scan_running = False
+        self.status("Scan stopped")
 
     def resume_scan(self):
-        try:
-            self.scan_paused = False
-            self.status("Scan resumed")
-        except:
-            pass
+        self.scan_paused = False
+        self.status("Scan resumed")
 
-    def format_value(self, value):
+    def status(self, msg):
         try:
-            num = float(value)
-            if abs(num) >= 1000 or abs(num) < 0.01:
-                return f"{num:.6g}"
-            else:
-                return f"{num:.4f}".rstrip('0').rstrip('.')
-        except:
-            return value
-
-    def status(self, message):
-        try:
-            self.status_label.config(text=message)
+            self.status_label.config(text=msg)
         except:
             pass
