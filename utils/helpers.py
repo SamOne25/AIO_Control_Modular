@@ -1,5 +1,10 @@
-import tkinter as tk
 import numpy as np
+import time
+from datetime import datetime
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from typing import List
+
 
 def get_best_unit(y: np.ndarray) -> str:
     if y is None or len(y) == 0:
@@ -109,3 +114,43 @@ def get_lin_unit_and_data(data):
         return "nW", data * 1e9
     return "W", data
 
+def append_event(event_log: List[str], text_widget: tk.Text,
+                 direction: str, message: str) -> None:
+    """
+    Fügt einen Eintrag zu event_log hinzu und schreibt ihn in das Text-Widget.
+    :param event_log: Liste aller bisherigen Log-Einträge
+    :param text_widget: tk.Text-Widget, in das die Zeilen geschrieben werden
+    :param direction: z.B. "SEND", "RESPONSE", "PEAK"
+    :param message: der eigentliche Text des Events
+    """
+    ts = time.strftime('%H:%M:%S')
+    entry = f"[{ts}] {direction}: {message}\n"
+    event_log.append(entry)
+    text_widget.insert("end", entry)
+    text_widget.see("end")
+
+
+def save_event_log(event_log: List[str]) -> None:
+    """
+    Öffnet einen Save-Dialog und schreibt event_log in die ausgewählte Datei.
+    """
+    fname = filedialog.asksaveasfilename(defaultextension=".txt",
+                                         filetypes=[("Text files","*.txt")])
+    if not fname:
+        return
+    try:
+        with open(fname, "w") as f:
+            f.writelines(event_log)
+        messagebox.showinfo("Event Log", f"{len(event_log)} Einträge gespeichert:\n{fname}")
+    except Exception as e:
+        messagebox.showerror("Save Error", f"Konnte Log nicht speichern:\n{e}")
+        
+def _OSA_make_filename(central_wl, span, resolution, integration, points, suffix="", ext=""):
+    """
+    Baut einen Dateinamen:
+    Spec_<YYYYMMDD>_<HHMMSS>_<central>nm_<span>nm_<res>nm_<integ>_<points><suffix><ext>
+    """
+    now   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    cw    = f"{central_wl:.3f}"
+    base  = f"Spec_{now}_{cw}nm_{span}nm_{resolution}nm_{integration}_{points}"
+    return f"{base}{suffix}{ext}"
