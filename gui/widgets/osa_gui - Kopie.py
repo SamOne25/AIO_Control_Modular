@@ -1,4 +1,3 @@
-from pyvisa.errors import VisaIOError
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
@@ -62,8 +61,6 @@ class OSAGUI(ttk.Frame):
 
         # Scan-Kontrolle
         self.scan_running = False
-        self.scan_mode = False
-
 
         # GUI aufbauen
         self.build_gui()
@@ -78,19 +75,15 @@ class OSAGUI(ttk.Frame):
 
         # ─── Top bar ───
         top = tk.Frame(main)
-        top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0,10))
+        top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         tk.Label(top, text="OSA IP:").grid(row=0, column=0, sticky="e")
         tk.Entry(top, textvariable=self.osa_ip, width=16).grid(row=0, column=1, sticky="w")
         self.connect_btn = tk.Button(top, text="Connect", width=12, command=self.toggle_connection)
-        self.connect_btn.grid(row=0, column=2, padx=(10,0))
-        tk.Label(top, text="Wavegen IP:").grid(row=0, column=3, sticky="e", padx=(20,2))
-        self.wg_ip = tk.StringVar(value="192.168.1.122")
-        tk.Entry(top, textvariable=self.wg_ip, width=16).grid(row=0, column=4, sticky="w")
-        self.wg_connect_btn = tk.Button(top, text="Connect WG", width=12, bg="red",
-                                        command=self.toggle_wavegen_connection)
-        self.wg_connect_btn.grid(row=0, column=5, padx=(10,0))
+        self.connect_btn.grid(row=0, column=2, padx=(10, 0))
+        ttk.Button(top, text="Wavegen ein-/ausblenden", command=self.toggle_wavegen_panel) \
+            .grid(row=0, column=3, padx=(10, 0))
 
-        # ─── Sweep Parameters ───
+        # ─── Sweep Parameters (2×4) ───
         param = tk.LabelFrame(main, text="Sweep Parameters", padx=8, pady=10)
         param.grid(row=1, column=0, sticky="nsew", pady=6)
         for c in range(2):
@@ -109,13 +102,13 @@ class OSAGUI(ttk.Frame):
             "Level Offset [dB]:":   "LOFS",
         }
         specs = [
-            ("Central WL [nm]:",     "entry", self.central_wl,      800,    1700),
-            ("Span [nm]:",           "combo", self.span,            self.spans,  None),
+            ("Central WL [nm]:",     "entry", self.central_wl,      800,        1700),
+            ("Span [nm]:",           "combo", self.span,            self.spans, None),
             ("Resolution [nm]:",     "combo", self.resolution,      self.resolutions, None),
             ("Integration:",         "combo", self.integration,     self.integrations, None),
             ("Sampling Points:",     "combo", self.points,          self.samp_points, None),
-            ("Reference LvL [dBm]:", "spin",  self.reference_lvl,     -90,     30),
-            ("Level Offset [dB]:",   "spin",  self.level_offset,     -30,     30),
+            ("Reference LvL [dBm]:", "spin",  self.reference_lvl,     -90,         30),
+            ("Level Offset [dB]:",   "spin",  self.level_offset,     -30,         30),
             ("Smooth:",              "combo", self.smooth_points,   SMT_OPTIONS, None),
         ]
         row = 0
@@ -131,121 +124,91 @@ class OSAGUI(ttk.Frame):
             elif typ == "combo":
                 cb = ttk.Combobox(param, values=opt1, textvariable=var, width=10, state="readonly")
                 cb.grid(row=row, column=col+1, sticky="w", padx=4, pady=4)
-                cb.bind("<<ComboboxSelected>>", lambda e, v=var, cmd=cmd_map[txt]: self.set_single_param(cmd, v.get()))
-                if txt == "Span [nm]:":
-                    self.span_cb = cb
-                elif txt == "Resolution [nm]:":
-                    self.resolution_cb = cb
-                elif txt == "Integration:":
-                    self.integration_cb = cb
-                elif txt == "Sampling Points:":
-                    self.points_cb = cb
-                elif txt == "Smooth:":
-                    self.smooth_cb = cb
-            else:
+                cb.bind("<<ComboboxSelected>>",
+                        lambda e, v=var, cmd=cmd_map[txt]: self.set_single_param(cmd, v.get()))
+            else:  # spin
                 sb = tk.Spinbox(param, from_=opt1, to=opt2, increment=1.0,
                                 textvariable=var, width=10,
                                 command=lambda v=var, cmd=spin_map[txt]: self.set_single_param(cmd, v.get()))
                 sb.grid(row=row, column=col+1, sticky="w", padx=4, pady=4)
                 sb.bind("<FocusOut>", lambda e, v=var, cmd=spin_map[txt]: self.set_single_param(cmd, v.get()))
-                if txt == "Reference LvL [dBm]:":
-                    self.ref_spin = sb
-                elif txt == "Level Offset [dB]:":
-                    self.offset_spin = sb
             if idx % 2 == 1:
                 row += 1
 
-        # ─── Quality Buttons ───
+        # ─── Quality buttons ───
         quality = tk.LabelFrame(param, text="Quality", padx=4, pady=4)
-        quality.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(10,0))
-        self.quality_buttons = []
-        for i, q in enumerate(("low","med","high")):
-            btn = ttk.Button(quality, text=q.capitalize(), command=lambda q=q: self.apply_quality(q))
-            btn.grid(row=0, column=i, padx=6, pady=2)
-            self.quality_buttons.append(btn)
+        quality.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        for i, q in enumerate(("low", "med", "high")):
+            ttk.Button(quality, text=q.capitalize(), command=lambda q=q: self.apply_quality(q)) \
+                .grid(row=0, column=i, padx=6, pady=2)
         row += 1
 
-        # ─── Sweep Buttons + Progress ───
+        # ─── Sweep buttons + progress ───
         btns = tk.Frame(param)
-        btns.grid(row=row, column=0, columnspan=4, pady=(8,4))
+        btns.grid(row=row, column=0, columnspan=4, pady=(8, 4))
         self.single_btn = ttk.Button(btns, text="Single Sweep", command=self.start_single_sweep)
         self.repeat_btn = ttk.Button(btns, text="Repeat Sweep", command=self.start_repeat_sweep)
         self.single_btn.pack(side="left", padx=6)
         self.repeat_btn.pack(side="left", padx=6)
-        self.scanmode_btn = tk.Button(btns, text="Scan Mode OFF", bg="lightgray", command=self.toggle_scan_mode)
-        self.scanmode_btn.pack(side="left", padx=6)
         row += 1
 
         self.progressbar = ttk.Progressbar(param, mode="determinate", length=200)
-        self.progressbar.grid(row=row, column=0, columnspan=4, pady=(4,0))
+        self.progressbar.grid(row=row, column=0, columnspan=4, pady=(4, 0))
         row += 1
 
         # ─── Status / Error ───
-        tk.Label(param, textvariable=self.status_var, fg="blue").grid(row=row, column=0, columnspan=4)
+        tk.Label(param, textvariable=self.status_var, fg="blue")\
+            .grid(row=row, column=0, columnspan=4)
         row += 1
-        tk.Label(param, textvariable=self.error_var, fg="red").grid(row=row, column=0, columnspan=4)
+        tk.Label(param, textvariable=self.error_var, fg="red")\
+            .grid(row=row, column=0, columnspan=4)
         row += 1
 
-        # ─── Scan via Wavegen ───
-        self.scan_frame = tk.LabelFrame(param, text="Scan via Wavegen", padx=6, pady=6)
-        self.scan_frame.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(10,0))
-        self.scan_frame.grid_remove()
-
-        # Start / End / Step
-        tk.Label(self.scan_frame, text="Start Freq (Hz):").grid(row=0, column=0, sticky="e", padx=4, pady=2)
-        self.scan_start = tk.Entry(self.scan_frame, width=10)
-        self.scan_start.insert(0, "4000")
+        # ─── Scan Controls ───
+        scan = tk.LabelFrame(param, text="Scan via Wavegen", padx=6, pady=6)
+        scan.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        # Scan parameter inputs
+        tk.Label(scan, text="Start (Hz):").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        self.scan_start = tk.Entry(scan, width=10); self.scan_start.insert(0, "4000")
         self.scan_start.grid(row=0, column=1, padx=4, pady=2)
-
-        tk.Label(self.scan_frame, text="End Freq (Hz):").grid(row=0, column=2, sticky="e", padx=4, pady=2)
-        self.scan_end = tk.Entry(self.scan_frame, width=10)
-        self.scan_end.insert(0, "5000")
+        tk.Label(scan, text="End (Hz):").grid(row=0, column=2, sticky="e", padx=4, pady=2)
+        self.scan_end = tk.Entry(scan, width=10); self.scan_end.insert(0, "5000")
         self.scan_end.grid(row=0, column=3, padx=4, pady=2)
-
-        tk.Label(self.scan_frame, text="Step (Hz):").grid(row=1, column=0, sticky="e", padx=4, pady=2)
-        self.scan_step = tk.Entry(self.scan_frame, width=10)
-        self.scan_step.insert(0, "100")
+        tk.Label(scan, text="Step (Hz):").grid(row=1, column=0, sticky="e", padx=4, pady=2)
+        self.scan_step = tk.Entry(scan, width=10); self.scan_step.insert(0, "100")
         self.scan_step.grid(row=1, column=1, padx=4, pady=2)
+        tk.Label(scan, text="Pause (s):").grid(row=1, column=2, sticky="e", padx=4, pady=2)
+        self.scan_pause = tk.Entry(scan, width=10); self.scan_pause.insert(0, "0.5")
+        self.scan_pause.grid(row=1, column=3, padx=4, pady=2)
+        tk.Button(scan, text="Start Scan", command=self.start_scan).grid(row=2, column=0, padx=6, pady=4)
+        tk.Button(scan, text="Stop Scan",  command=self.stop_scan).grid(row=2, column=1, padx=6, pady=4)
 
-        # Current Freq
-        tk.Label(self.scan_frame, text="Current Freq (Hz):").grid(row=2, column=0, sticky="e", padx=4, pady=2)
-        self.curr_freq_var = tk.DoubleVar(value=0.0)
-        self.curr_freq_entry = tk.Entry(self.scan_frame, textvariable=self.curr_freq_var, width=10)
-        self.curr_freq_entry.grid(row=2, column=1, padx=4, pady=2, columnspan=2)
+        # Peak displays inside Scan frame
+        tk.Label(scan, textvariable=self.current_peak_var, fg="darkgreen") \
+            .grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        tk.Label(scan, textvariable=self.max_peak_var, fg="darkblue") \
+            .grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        tk.Button(scan, text="Reset Max", width=10, command=self._reset_max_peak) \
+            .grid(row=4, column=2, padx=(6, 0), pady=(4, 0))
+        row += 1
 
-        # Adjust Frequency
-        self.adj_frame = tk.LabelFrame(self.scan_frame, text="Adjust Frequency", padx=5, pady=5)
-        self.adj_frame.grid(row=3, column=0, columnspan=4, sticky="ew", padx=4, pady=(8,4))
-        steps = [(-10,10),(-1,1),(-0.1,0.1),(-0.01,0.01),(-0.001,0.001)]
-        for col,(neg,pos) in enumerate(steps):
-            tk.Button(self.adj_frame, text=f"{neg:+}Hz", width=6,
-                      command=lambda s=neg: self.adjust_scan_freq(s)).grid(row=0, column=col, padx=2, pady=2)
-            tk.Button(self.adj_frame, text=f"{pos:+}Hz", width=6,
-                      command=lambda s=pos: self.adjust_scan_freq(s)).grid(row=1, column=col, padx=2, pady=2)
-        tk.Button(self.adj_frame, text="×10", width=6,
-                  command=lambda: self.scale_scan_freq(10)).grid(row=0, column=len(steps), padx=6, pady=2)
-        tk.Button(self.adj_frame, text="÷10", width=6,
-                  command=lambda: self.scale_scan_freq(0.1)).grid(row=1, column=len(steps), padx=6, pady=2)
-
-        # Start / Stop Scan
-        tk.Button(self.scan_frame, text="Start Scan", command=self.start_scan).grid(row=4, column=0, padx=6, pady=6)
-        tk.Button(self.scan_frame, text="Stop Scan", command=lambda: [self.stop_scan(), self.start_repeat_sweep()])\
-            .grid(row=4, column=1, padx=6, pady=6)
-
-        # Peak Displays
-        tk.Label(self.scan_frame, textvariable=self.current_peak_var, fg="darkgreen")\
-            .grid(row=5, column=0, columnspan=2, sticky="w", pady=(8,0))
-        tk.Label(self.scan_frame, textvariable=self.max_peak_var, fg="darkblue")\
-            .grid(row=5, column=2, columnspan=2, sticky="w", pady=(8,0))
-        tk.Button(self.scan_frame, text="Reset Max", width=10, command=self._reset_max_peak)\
-            .grid(row=6, column=0, padx=6, pady=(4,0))
+        # ─── Save Frame ───
+        save_frame = tk.LabelFrame(param, text="Save", padx=8, pady=6)
+        save_frame.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        ttk.Button(save_frame, text="Save Data (.npy)", command=self.save_data_npy) \
+            .grid(row=0, column=0, padx=6)
+        ttk.Button(save_frame, text="Save Linear Plot", command=self.save_linear_plot) \
+            .grid(row=0, column=1, padx=6)
+        ttk.Button(save_frame, text="Save dBm Plot", command=self.save_dbm_plot) \
+            .grid(row=0, column=2, padx=6)
+        row += 1
 
         # ─── Wavegen embed frame ───
-        row += 1
         self.wavegen_embed = tk.LabelFrame(param, text="Wavegen Control", padx=5, pady=5)
-        self.wavegen_embed.grid(row=row, column=0, columnspan=4, sticky="nsew", pady=(10,0))
+        self.wavegen_embed.grid(row=row, column=0, columnspan=4, sticky="nsew", pady=(10, 0))
         self.wavegen_embed.grid_remove()
         param.rowconfigure(row, weight=1)
+        row += 1
 
         # ─── Plots ───
         plots = tk.Frame(main)
@@ -265,13 +228,6 @@ class OSAGUI(ttk.Frame):
         self.plot_tabs.add(self.lin_tab, text="Linear Scale")
         self.canvas_lin = FigureCanvasTkAgg(self.fig_lin, self.lin_tab)
         self.canvas_lin.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
-
-        # ─── SAVE FRAME ───
-        save_frame = tk.LabelFrame(main, text="Save", padx=8, pady=6)
-        save_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10,0))
-        ttk.Button(save_frame, text="Save Data (.npy)",   command=self.save_data_npy).grid(row=0, column=0, padx=6)
-        ttk.Button(save_frame, text="Save Linear Plot",  command=self.save_linear_plot).grid(row=0, column=1, padx=6)
-        ttk.Button(save_frame, text="Save dBm Plot",     command=self.save_dbm_plot).grid(row=0, column=2, padx=6)
 
 
     def update_conn_btn(self):
@@ -334,59 +290,38 @@ class OSAGUI(ttk.Frame):
             self.error_var.set(f"Read failed: {e}")
 
     def set_single_param(self, cmd, value):
-        """
-        Setzt einen einzelnen Parameter am OSA.
-        Bei jedem Fehler (VBW, SMT, o.ä.) wird nur eine Fehlermeldung angezeigt,
-        das Gerät bleibt aber verbunden.
-        """
         if self.connection_state.get() != "connected":
             return
-
-        osa = self.controller.osa
         try:
+            osa = self.controller.osa
             if cmd == "VBW":
-                # Integration string in Hz umwandeln
                 hz = integration_string_to_hz(value)
                 osa.write(f"{cmd} {hz}")
                 actual = osa.query("VBW?").strip()
                 if int(round(float(actual))) != int(round(hz)):
-                    raise ValueError(f"expected {hz}, got {actual}")
-
+                    raise ValueError(actual)
             elif cmd == "RLV":
+                # sicherstellen, dass wir im dBm-Modus sind
                 osa.write("LOG 5")
                 osa.write(f"{cmd} {float(value)}")
                 actual = float(osa.query("RLV?").strip())
                 if abs(actual - float(value)) > 0.1:
-                    raise ValueError(f"expected {value}, got {actual}")
-
+                    raise ValueError(actual)
             elif cmd == "LOFS":
                 osa.write(f"{cmd} {float(value)}")
                 actual = float(osa.query("LOFS?").strip())
                 if abs(actual - float(value)) > 0.1:
-                    raise ValueError(f"expected {value}, got {actual}")
-
+                    raise ValueError(actual)
             else:
-                # z.B. RES, SPN, MPT, SMT …
                 osa.write(f"{cmd} {value}")
                 actual = osa.query(f"{cmd}?").strip()
-                # bei string‐Parametern (SMT) kann man auf string‐Vergleich umstellen,
-                # hier versuchen wir es trotzdem numerisch, und falls es fehlschlägt,
-                # landen wir im except‐Block
-                try:
-                    if abs(float(actual) - float(value)) > 0.1:
-                        raise ValueError(f"expected {value}, got {actual}")
-                except ValueError:
-                    # für SMT („OFF“, „ON“) etc.
-                    if actual.strip().upper() != str(value).strip().upper():
-                        raise ValueError(f"expected '{value}', got '{actual}'")
-
-            # alles ok
+                if abs(float(actual) - float(value)) > 0.1:
+                    raise ValueError(actual)
             self.error_var.set("")
-
         except Exception as e:
-            # nur Warnung anzeigen, nicht trennen
-            self.error_var.set(f"{cmd} set warning: {e}")
-
+            self.error_var.set(f"{cmd} set failed: {e}")
+            # bei Parameter-Fehler OSA neu verbinden, um Error-Register zu clearen
+            self.disconnect_osa()
 
 
     def apply_quality(self, quality):
@@ -422,44 +357,40 @@ class OSAGUI(ttk.Frame):
             osa.write('*CLS')
             osa.write('SSI')
             osa.query('*OPC?')
+            self.progressbar["value"] = 80
+
             staw, stow, npts = np.fromstring(osa.query("DCA?"), sep=",")
-            wl  = np.linspace(staw, stow, int(npts))
+            wl = np.linspace(staw, stow, int(npts))
             dbm = np.fromstring(osa.query("DMA?"), dtype=float, sep="\r\n")
             lin = 10 ** (dbm / 10)
 
-            # aktuelle Frequenz vom Wavegen holen
-            try:
-                resp = self.wavegen_controller.query("SOUR1:FREQ?")
-                freq = float(resp)
-            except Exception:
-                freq = 0.0
-
-            # Peak berechnen und anzeigen
-            idx    = int(np.nanargmax(dbm))
-            cur_val = dbm[idx]
-            cur_wl  = wl[idx]
-            # hier wird jetzt freq mit übergeben
-            self.master.after(0, lambda v=cur_val, w=cur_wl, f=freq: self._set_peak(v, w, f))
-
-            # Plot
             self.last_wavelengths = wl
             self.last_power_dbm   = dbm
             self.last_power_lin   = lin
-            self.master.after(0, lambda w=wl, ln=lin, db=dbm: self.plot_results(w, ln, db, live=False))
+            
+            
+            # update green+blue peaks
+            idx     = int(np.nanargmax(dbm))
+            cur_val = dbm[idx]
+            cur_wl  = wl[idx]
+            self._set_peak(cur_val, cur_wl, freq_hz=0.0)
+            
+            self.plot_results(wl, lin, dbm, live=False)
+
 
             self.progressbar["value"] = 100
             self.status_var.set("Sweep done.")
         except Exception as e:
             self.error_var.set(f"Sweep failed: {e}")
             self.status_var.set("Sweep error")
+            # sauber beenden und Session schließen
+            self.disconnect_osa()
         finally:
             self.sweep_running = False
             self.set_button_states("stopped")
-            
+
+
     def start_repeat_sweep(self):
-        if self.controller.osa is None:
-            messagebox.showerror("Error","Repeat Sweep nur nach OSA-Verbindung möglich!")
-            return
         if self.repeat_running:
             self.abort_flag.set()
             self.set_button_states("stopped")
@@ -472,58 +403,48 @@ class OSAGUI(ttk.Frame):
         self.progressbar.start()
         threading.Thread(target=self.repeat_polling_loop, daemon=True).start()
 
-
-
     def repeat_polling_loop(self):
-        osa = self.controller.osa
-        # OSA in Repeat‐Mode schalten
         try:
+            osa = self.controller.osa
+
+            # erst Error-Register löschen, dann in Repeat schalten
             osa.write('*CLS')
             osa.write('SRT')
-        except Exception as e:
-            self.master.after(0, lambda: self.error_var.set(f"Could not start repeat mode: {e}"))
-            return
-        self.master.after(0, lambda: self.status_var.set("Repeat (live polling)…"))
-    
-        while not self.abort_flag.is_set():
-            try:
-                # Daten abholen
-                resp = osa.query("DCA?")
-                staw, stow, npts = map(float, resp.split(','))
+            self.master.after(0, lambda: self.status_var.set("Repeat (live polling)…"))
+
+            while not self.abort_flag.is_set():
+                staw, stow, npts = np.fromstring(osa.query("DCA?"), sep=",")
                 wl  = np.linspace(staw, stow, int(npts))
                 dbm = np.fromstring(osa.query("DMA?"), dtype=float, sep="\r\n")
-                lin = 10 ** (dbm/10)
-            except VisaIOError as e:
-                self.master.after(0, lambda: self.error_var.set(f"I/O error during repeat: {e}"))
-                break
-            except Exception as e:
-                self.master.after(0, lambda: self.error_var.set(f"Repeat polling error: {e}"))
-                break
-    
-            # Peak berechnen
-            idx     = int(np.nanargmax(dbm))
-            cur_val = dbm[idx]
-            cur_wl  = wl[idx]
-            # ggf. Frequenz aus der Wavegen-GUI lesen
-            try:
-                resp = self.wavegen_controller.query("SOUR1:FREQ?")
-                freq = float(resp)
-            except:
-                freq = 0.0
-    
-            # GUI‐Updates
-            self.master.after(0, lambda v=cur_val, w=cur_wl, f=freq: self._set_peak(v, w, f))
-            self.master.after(0, lambda w=wl, ln=lin, db=dbm: self.plot_results(w, ln, db, live=True))
-    
-            time.sleep(0.3)
-    
-        # Repeat beenden
-        try:
+                lin = 10 ** (dbm / 10)
+                
+                idx     = int(np.nanargmax(dbm))
+                cur_val = dbm[idx]
+                cur_wl  = wl[idx]
+                try:
+                    freq = self.wavegen_gui.current_frequency[1]
+                except:
+                    freq = 0.0
+                self._set_peak(cur_val, cur_wl, freq)
+
+                self.last_wavelengths = wl
+                self.last_power_dbm   = dbm
+                self.last_power_lin   = lin
+                self.master.after(0, lambda w=wl, ln=lin, d=dbm: self.plot_results(w, ln, d, live=True))
+
+                time.sleep(0.3)
+
             osa.write('SST')
-        except:
-            pass
-        self.master.after(0, lambda: self.status_var.set("Repeat stopped."))
-        self.master.after(0, self._finish_repeat)
+            self.master.after(0, lambda: self.status_var.set("Repeat stopped."))
+        except Exception as e:
+            self.error_var.set(f"Repeat failed: {e}")
+            self.master.after(0, lambda: self.status_var.set("Repeat error"))
+            # sauber beenden und Session schließen
+            self.disconnect_osa()
+        finally:
+            # GUI-Cleanup in Main-Thread
+            self.master.after(0, self._finish_repeat)
+
 
     def _finish_repeat(self):
         self.progressbar.stop()
@@ -541,137 +462,53 @@ class OSAGUI(ttk.Frame):
         else:
             self.single_btn.config(text="Single Sweep",state="normal")
             self.repeat_btn.config(text="Repeat Sweep",state="normal")
-            
-    def toggle_scan_mode(self):
-        if self.connection_state.get() != "connected":
-            messagebox.showerror("Error","Bitte zuerst OSA verbinden!")
-            return
-
-        self.scan_mode = not self.scan_mode
-        if self.scan_mode:
-            self.scanmode_btn.config(text="Scan Mode ON", bg="yellow")
-        else:
-            self.scanmode_btn.config(text="Scan Mode OFF", bg="lightgray")
-        (self.scan_frame.grid if self.scan_mode else self.scan_frame.grid_remove)()
-
-        # Sperre Sweep-Parameter, Buttons und Quality-Buttons
-        to_disable = (
-            [self.span_cb, self.resolution_cb, self.integration_cb,
-             self.points_cb, self.smooth_cb, self.ref_spin, self.offset_spin,
-             self.single_btn, self.repeat_btn] +
-            self.quality_buttons
-        )
-        for w in to_disable:
-            w.config(state="disabled" if self.scan_mode else
-                     ("readonly" if isinstance(w, ttk.Combobox) else "normal"))
-
-        if self.scan_mode:
-            # Wavegen-Frequenz abfragen – Query-Method im WavegenController vorausgesetzt
-            try:
-                resp = self.wavegen_controller.query("SOUR1:FREQ?")
-                f0 = float(resp)
-            except:
-                f0 = 0.0
-
-            # Anzeige mit 3 Nachkommastellen
-            self.curr_freq_var.set(round(f0,3))
-
-            # Start/End auf ±1 Hz
-            self.scan_start.delete(0, "end")
-            self.scan_start.insert(0, f"{f0-1:.3f}")
-            self.scan_end.delete(0, "end")
-            self.scan_end.insert(0, f"{f0+1:.3f}")
-
-            # sofort Scan starten
-            self.start_scan()
-        else:
-            # Scan stoppen
-            self.stop_scan()
-
 
     def start_scan(self):
-        # Stoppe ggf. laufenden Repeat-Modus
-        self.abort_flag.set()
-        self.repeat_running = False
-
-        # Verhindere Doppelstarts
-        if self.scan_running:
-            return
-
-        # Lese Start, Ende und Schrittweite
+        if self.scan_running: return
         try:
-            self._scan_f0 = float(self.scan_start.get())
-            self._scan_f1 = float(self.scan_end.get())
-            self._scan_df = float(self.scan_step.get())
-        except ValueError:
-            messagebox.showerror("Scan error", "Ungültige Frequenzparameter")
+            f0 = float(self.scan_start.get()); f1 = float(self.scan_end.get())
+            df = float(self.scan_step.get()); pause = float(self.scan_pause.get())
+        except Exception as e:
+            messagebox.showerror("Scan error", f"Invalid parameters: {e}")
             return
+        self.scan_running=True
+        threading.Thread(target=self._scan_thread, args=(f0,f1,df,pause), daemon=True).start()
 
-        self.scan_running = True
-        threading.Thread(target=self._scan_thread, daemon=True).start()
+    def _scan_thread(self, f0, f1, df, pause):
+        """Performs a frequency scan via the Wavegen and updates peaks thread-safely."""
+        while self.scan_running and f0 <= f1:
+            # 1) Wavegen-Frequenz setzen
+            self.wavegen_controller.write(f"SOUR1:FREQ {f0}")
+            time.sleep(pause)
 
-
-    def _scan_thread(self):
-        osa = self.controller.osa
-        f   = self._scan_f0
-        df  = self._scan_df
-
-        while self.scan_running and f <= self._scan_f1:
-            # 1) Wavegen setzen
-            try:
-                self.wavegen_controller.write(f"SOUR1:FREQ {f}")
-            except:
-                pass
-            # Anzeige im GUI
-            self.master.after(0, lambda v=f: self.curr_freq_var.set(round(v,3)))
-
-            # 2) OSA-Single-Sweep triggern
-            try:
-                osa.write('*CLS')
-                osa.write('SSI')
-                try:
-                    osa.query('*OPC?')
-                except EOFError:
-                    pass
-            except Exception as e:
-                self.master.after(0, lambda e=e: self.error_var.set(f"Sweep trigger error: {e}"))
-                break
+            # 2) OSA Single Sweep
+            osa = self.controller.osa
+            osa.write('*CLS')
+            osa.write('SSI')
+            osa.query('*OPC?')
 
             # 3) Daten auslesen
-            try:
-                resp = osa.query("DCA?")
-                staw, stow, npts = map(float, resp.split(','))
-                wl  = np.linspace(staw, stow, int(npts))
-                dbm = np.fromstring(osa.query("DMA?"), dtype=float, sep="\r\n")
-                lin = 10 ** (dbm / 10)
-            except Exception as e:
-                self.master.after(0, lambda e=e: self.error_var.set(f"Data read error: {e}"))
-                f += df
-                continue
+            staw, stow, npts = np.fromstring(osa.query("DCA?"), sep=",")
+            wl  = np.linspace(staw, stow, int(npts))
+            dbm = np.fromstring(osa.query("DMA?"), dtype=float, sep="\r\n")
 
-            # 4) Peak berechnen
+            # 4) Peak-Berechnung
             idx     = int(np.nanargmax(dbm))
             cur_val = dbm[idx]
             cur_wl  = wl[idx]
 
-            # und wieder die echte freq holen
-            try:
-                resp = self.wavegen_controller.query("SOUR1:FREQ?")
-                freq = float(resp)
-            except:
-                freq = f
+            # 5) GUI-Update des aktuellen und historischen Peaks über after
+            self.master.after(
+                0,
+                lambda val=cur_val, wl_val=cur_wl, freq=f0: self._set_peak(val, wl_val, freq)
+            )
 
-            # GUI-Update
-            self.master.after(0, lambda v=cur_val, w=cur_wl, hz=freq: self._set_peak(v, w, hz))
-            self.master.after(0, lambda w=wl, ln=lin, db=dbm: self.plot_results(w, ln, db, live=True))
+            f0 += df
 
-            # 5) nächste Frequenz
-            f += df
-
-        # fertig → in Repeat zurück
+        # 6) am Ende ebenfalls status über after setzen
+        self.master.after(0, lambda: self.status_var.set("Scan done."))
         self.scan_running = False
-        self.master.after(0, self.start_repeat_sweep)
-        
+
     def plot_results(self, wavelengths, data_lin, data_dbm, live=False):
         """Zeichnet die beiden Plots (linear und dBm), ohne Peak-Labels zu verändern."""
         # Einheit/Faktor für Linear-Plot bestimmen
@@ -713,11 +550,57 @@ class OSAGUI(ttk.Frame):
         self.fig_dbm.tight_layout()
         self.canvas_dbm.draw()
 
+
+
+
+
+
+
+
     def stop_scan(self):
-        # beende Scan-Thread
-        self.scan_running = False
-        # wechsle in Live-Repeat am OSA
-        self.start_repeat_sweep()
+        self.scan_running=False
+        self.status_var.set("Scan stopped.")
+
+    def plot_results(self, wavelengths, data_lin, data_dbm, live=False):
+            """Draws the linear and dBm plots without touching peak labels."""
+            # Determine unit scaling for linear plot
+            max_lin = np.nanmax(data_lin) if len(data_lin) else 1
+            if max_lin < 1e-6:
+                unit, factor = "pW", 1e9
+            elif max_lin < 1e-3:
+                unit, factor = "nW", 1e6
+            elif max_lin < 1:
+                unit, factor = "µW", 1e3
+            else:
+                unit, factor = "mW", 1
+            y_lin = data_lin * factor
+            txt = " (Live)" if live else ""
+    
+            # Linear-scale plot
+            self.ax_lin.clear()
+            self.ax_lin.plot(wavelengths, y_lin)
+            self.ax_lin.set_title(f"OSA Linear Scale{txt}")
+            self.ax_lin.set_xlabel("Wavelength (nm)")
+            self.ax_lin.set_ylabel(f"Power ({unit})")
+            self.ax_lin.xaxis.set_major_locator(MaxNLocator(5))
+            self.ax_lin.xaxis.set_minor_locator(AutoMinorLocator(2))
+            self.ax_lin.grid(which='major', axis='x', linestyle='-')
+            self.ax_lin.grid(which='minor', axis='x', linestyle=':', alpha=0.7)
+            self.fig_lin.tight_layout()
+            self.canvas_lin.draw()
+    
+            # dBm-scale plot
+            self.ax_dbm.clear()
+            self.ax_dbm.plot(wavelengths, data_dbm)
+            self.ax_dbm.set_title(f"OSA dBm Scale{txt}")
+            self.ax_dbm.set_xlabel("Wavelength (nm)")
+            self.ax_dbm.set_ylabel("Power (dBm)")
+            self.ax_dbm.xaxis.set_major_locator(MaxNLocator(5))
+            self.ax_dbm.xaxis.set_minor_locator(AutoMinorLocator(2))
+            self.ax_dbm.grid(which='major', axis='x', linestyle='-')
+            self.ax_dbm.grid(which='minor', axis='x', linestyle=':', alpha=0.7)
+            self.fig_dbm.tight_layout()
+            self.canvas_dbm.draw()
             
     def save_data_npy(self):
         if self.last_wavelengths is None:
@@ -737,30 +620,6 @@ class OSAGUI(ttk.Frame):
         file = filedialog.asksaveasfilename(defaultextension=".png",filetypes=[("PNG","*.png")])
         if file:
             self.fig_dbm.savefig(file,dpi=600,bbox_inches='tight'); messagebox.showinfo("Saved","dBm plot saved.")
-
-    def toggle_wavegen_connection(self):
-        """
-        Connect/Disconnect zum Wavegen:
-        - ruft wavegen_controller.connect()/disconnect() auf
-        - wechselt Button-Text und Farbe
-        """
-        # testen, ob bereits verbunden
-        if getattr(self.wavegen_controller, "gen", None) is None:
-            # nicht verbunden → verbinden
-            try:
-                ip = self.wg_ip.get().strip()
-                self.wavegen_controller.connect(ip)
-                self.wg_connect_btn.config(text="Disconnect WG", bg="green")
-            except Exception as e:
-                messagebox.showerror("Wavegen Error", f"Connection failed: {e}")
-        else:
-            # verbunden → trennen
-            try:
-                self.wavegen_controller.disconnect()
-                self.wg_connect_btn.config(text="Connect WG", bg="red")
-            except Exception as e:
-                messagebox.showerror("Wavegen Error", f"Disconnection failed: {e}")
-
 
     def toggle_wavegen_panel(self):
         if self.wavegen_embed.winfo_ismapped():
@@ -787,16 +646,6 @@ class OSAGUI(ttk.Frame):
     def _reset_max_peak(self):
         self._max_peak_dbm = -np.inf
         self.max_peak_var.set("Max Peak: -- dBm @ -- nm, -- Hz")
-
-    def adjust_scan_freq(self, step):
-        new_f = self.curr_freq_var.get() + step
-        self.curr_freq_var.set(new_f)
-        self.wavegen_controller.write(f"SOUR1:FREQ {new_f}")
-
-    def scale_scan_freq(self, factor):
-        new_f = self.curr_freq_var.get() * factor
-        self.curr_freq_var.set(new_f)
-        self.wavegen_controller.write(f"SOUR1:FREQ {new_f}")
 
             
     def on_closing(self):
