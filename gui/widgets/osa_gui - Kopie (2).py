@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading, time
 import numpy as np
+import logging
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.ticker import MaxNLocator, AutoMinorLocator
@@ -50,9 +51,10 @@ class OSAGUI(ttk.Frame):
         self.event_log = []
 
         # Sweep-Kontrolle
-        self.sweep_running  = False
-        self.repeat_running = False
-        self.abort_flag     = threading.Event()
+        self.sweep_running   = False
+        self.repeat_running  = False
+        self.scan_abort_flag   = threading.Event()
+        self.repeat_abort_flag = threading.Event()
 
         # Matplotlib-Figures
         self.fig_dbm, self.ax_dbm = plt.subplots(figsize=(6,4), dpi=150)
@@ -204,7 +206,7 @@ class OSAGUI(ttk.Frame):
         for label, attr, default in [
             ("Start Freq (Hz):", "scan_start", "4000"),
             ("End   Freq (Hz):", "scan_end",   "5000"),
-            ("Step  (Hz):",      "scan_step",  "0.2"),
+            ("Step  (Hz):",      "scan_step",  "0.1"),
         ]:
             tk.Label(self.scan_frame, text=label).grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
             ent = tk.Entry(self.scan_frame, width=12)
@@ -215,22 +217,13 @@ class OSAGUI(ttk.Frame):
 
         # Current Freq
         tk.Label(self.scan_frame, text="Current Freq (Hz):").grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
-        
-        # Entry-Textfeld (aktualisiert nur bei Verbindung)
         self.curr_freq_var = tk.StringVar(value="0.000")
         self.curr_freq_entry = tk.Entry(self.scan_frame, textvariable=self.curr_freq_var, width=12)
         self.curr_freq_entry.grid(row=scan_row, column=1, sticky="w", padx=4, pady=2)
         self.curr_freq_entry.bind("<Return>", self._manual_freq_entry)
-        self.curr_freq_entry.bind("<FocusOut>", self._manual_freq_entry)
         
-        # Button "<-" zum Übertragen der aktuellen Frequenz ins Textfeld
-        self.transfer_btn = ttk.Button(self.scan_frame, text="<-", width=3, command=self._transfer_freq)
-        self.transfer_btn.grid(row=scan_row, column=2, padx=2, pady=2, sticky="w")
-        
-        # Blaues Label (zeigt immer aktuelle Wavegen-Frequenz)
         self.curr_freq_label = tk.Label(self.scan_frame, text="0.000 Hz", fg="blue", width=12, anchor="w")
-        self.curr_freq_label.grid(row=scan_row, column=3, sticky="w", padx=4, pady=2)
-        
+        self.curr_freq_label.grid(row=scan_row, column=2, sticky="w", padx=4, pady=2)
         scan_row += 1
 
         # Adjust Frequency
@@ -257,13 +250,13 @@ class OSAGUI(ttk.Frame):
 
         # Peak Displays
         tk.Label(self.scan_frame, text="Current Peak:", fg="darkgreen")\
-            .grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
+            .grid(row=scan_row, column=0, sticky="w", padx=4, pady=2)
         tk.Label(self.scan_frame, textvariable=self.current_peak_var, fg="darkgreen")\
             .grid(row=scan_row, column=1, columnspan=3, sticky="w", padx=4, pady=2)
         scan_row += 1
-
+        
         tk.Label(self.scan_frame, text="Max Peak:", fg="darkred")\
-            .grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
+            .grid(row=scan_row, column=0, sticky="w", padx=4, pady=2)
         tk.Label(self.scan_frame, textvariable=self.max_peak_var, fg="darkred")\
             .grid(row=scan_row, column=1, columnspan=3, sticky="w", padx=4, pady=2)
         scan_row += 1
@@ -349,7 +342,7 @@ class OSAGUI(ttk.Frame):
             self.controller.osa = None
 
     def disconnect_osa(self):
-        self.abort_flag.set()
+        self.scan_abort_flag.set()
         if getattr(self.controller, "osa", None):
             append_event(self.event_log, self.log_text, "SEND", "SST")
             try:
@@ -469,12 +462,12 @@ class OSAGUI(ttk.Frame):
     # ─── Single Sweep ──────────────────────────────────────────────────────────
     def start_single_sweep(self):
         if self.sweep_running:
-            self.abort_flag.set()
+            self.scan_abort_flag.set()
             self.set_button_states("stopped")
             self.status_var.set("Sweep stopped.")
             return
         self.sweep_running = True
-        self.abort_flag.clear()
+        self.scan_abort_flag.clear()
         self.set_button_states("single")
         self.progressbar["value"] = 0
         threading.Thread(target=self.single_sweep_thread, daemon=True).start()
@@ -487,7 +480,7 @@ class OSAGUI(ttk.Frame):
     
             # 1) Gerät zurücksetzen und Sweep starten
             for cmd in ("*CLS", "SSI"):
-                if self.abort_flag.is_set():
+                if self.scan_abort_flag.is_set():
                     self.master.after(0, lambda: self.status_var.set("Sweep aborted"))
                     return
                 append_event(self.event_log, self.log_text, "SEND", cmd)
@@ -498,7 +491,7 @@ class OSAGUI(ttk.Frame):
             osa.query("*OPC?")
             append_event(self.event_log, self.log_text, "RESPONSE", "1")
     
-            if self.abort_flag.is_set():
+            if self.scan_abort_flag.is_set():
                 self.master.after(0, lambda: self.status_var.set("Sweep aborted"))
                 return
     
@@ -509,7 +502,7 @@ class OSAGUI(ttk.Frame):
             staw, stow, npts = map(float, dca.split(","))
             wl = np.linspace(staw, stow, int(npts))
     
-            if self.abort_flag.is_set():
+            if self.scan_abort_flag.is_set():
                 self.master.after(0, lambda: self.status_var.set("Sweep aborted"))
                 return
     
@@ -555,11 +548,12 @@ class OSAGUI(ttk.Frame):
             messagebox.showerror("Error", "Repeat Sweep only after OSA connect!")
             return
         if self.repeat_running:
-            self.abort_flag.set()
-            self.set_button_states("stopped")
-            self.status_var.set("Repeat stopped.")
+            # abbrechen
+            self.repeat_abort_flag.set()
             return
-        self.abort_flag.clear()
+
+        # Repeat starten
+        self.repeat_abort_flag.clear()
         self.repeat_running = True
         self.set_button_states("repeat")
         self.progressbar.config(mode="indeterminate")
@@ -568,123 +562,111 @@ class OSAGUI(ttk.Frame):
 
     def repeat_polling_loop(self):
         osa = self.controller.osa
-    
+        append_event(self.event_log, self.log_text, "INFO", "repeat_polling_loop started")
+
         # OSA in Repeat-Mode schalten
         append_event(self.event_log, self.log_text, "SEND", "*CLS")
         osa.write("*CLS")
         append_event(self.event_log, self.log_text, "SEND", "SRT")
         osa.write("SRT")
         self.master.after(0, lambda: self.status_var.set("Repeat (live polling)…"))
-    
-        while not self.abort_flag.is_set():
+
+        # Polling-Schleife
+        while not self.repeat_abort_flag.is_set():
             try:
-                if self.abort_flag.is_set():
-                    break
-    
-                # 1) Sweep-Beschreibung holen
+                # Sweep-Beschreibung
                 append_event(self.event_log, self.log_text, "SEND", "DCA?")
                 dca = osa.query("DCA?")
                 append_event(self.event_log, self.log_text, "RESPONSE", dca.strip())
                 staw, stow, npts = map(float, dca.split(","))
                 wl = np.linspace(staw, stow, int(npts))
-    
-                # 2) Power-Daten holen
+
+                # Power-Daten
                 append_event(self.event_log, self.log_text, "SEND", "DMA?")
                 raw = osa.query("DMA?")
                 append_event(self.event_log, self.log_text, "RESPONSE", "<binary>")
                 dbm = np.fromstring(raw, dtype=float, sep="\r\n")
                 lin = 10 ** (dbm / 10)
-    
-                # 3) Wavegen-Frequenz (nur wenn verbunden)
-                if getattr(self.wavegen_controller, "gen", None) is not None:
-                    try:
-                        append_event(self.event_log, self.log_text, "SEND", "SOUR1:FREQ?")
-                        resp = self.wavegen_controller.query("SOUR1:FREQ?")
-                        append_event(self.event_log, self.log_text, "RESPONSE", resp.strip())
-                        freq = float(resp)
-    
-                        # Update blaues Label regelmäßig
-                        self.master.after(0, lambda f=freq: self.curr_freq_label.config(text=f"{f:.3f} Hz"))
-    
-                    except Exception as e:
-                        append_event(self.event_log, self.log_text, "ERROR", f"Wavegen read failed: {e}")
-                        self.master.after(0, lambda e=e: self.error_var.set(f"Repeat polling error: {e}"))
-                        break
+
+                # Wavegen-Freq
+                if getattr(self.wavegen_controller, "gen", None):
+                    append_event(self.event_log, self.log_text, "SEND", "SOUR1:FREQ?")
+                    resp = self.wavegen_controller.query("SOUR1:FREQ?")
+                    append_event(self.event_log, self.log_text, "RESPONSE", resp.strip())
+                    freq = float(resp)
+                    self.master.after(0, lambda f=freq: self.curr_freq_label.config(text=f"{f:.3f} Hz"))
                 else:
                     self.master.after(0, lambda: self.curr_freq_label.config(text="0.000 Hz"))
-                    freq = 0.0
-    
-                # 4) Peak berechnen und anzeigen
+
+                # Peak & Plot
                 idx = int(np.nanargmax(dbm))
                 cur_val, cur_wl = dbm[idx], wl[idx]
-                freq_text = f"{freq:.3f} Hz"
-                text = f"Peak: {cur_val:.2f} dBm @ {cur_wl:.3f} nm, {freq_text}"
-                append_event(self.event_log, self.log_text, "PEAK", text)
-                self.master.after(0, lambda t=text: self.current_peak_var.set(t))
-    
-                # Max-Peak aktualisieren
-                if cur_val > self._max_peak_dbm:
-                    self._max_peak_dbm = cur_val
-                    self.master.after(0, lambda t=text: self.max_peak_var.set(t))
-    
-                # 5) Plot aktualisieren
+                self.master.after(0, lambda v=cur_val, w=cur_wl, f=freq if 'freq' in locals() else 0.0:
+                                  self._set_peak(v, w, f))
                 self.master.after(0, lambda w=wl, ln=lin, db=dbm: self.plot_results(w, ln, db, live=True))
-    
-                # kurze Pause
-                time.sleep(0.3)
-    
+
             except VisaIOError as e:
                 self.master.after(0, lambda e=e: self.error_var.set(f"I/O error during repeat: {e}"))
                 break
             except Exception as e:
+                append_event(self.event_log, self.log_text, "ERROR", f"repeat_polling_loop crash: {e}")
                 self.master.after(0, lambda e=e: self.error_var.set(f"Repeat polling error: {e}"))
                 break
-    
-        # Repeat-Mode beenden
+
+            time.sleep(0.3)
+
+        # Repeat beenden
         append_event(self.event_log, self.log_text, "SEND", "SST")
         try:
             osa.write("SST")
         except:
             pass
-    
+
+        append_event(self.event_log, self.log_text, "INFO", "repeat_polling_loop exited")
+        self.repeat_running = False
         self.master.after(0, lambda: self.status_var.set("Repeat stopped."))
         self.master.after(0, self._finish_repeat)
 
     # ─── Scan Mode ────────────────────────────────────────────────────────────
     def toggle_scan_mode(self):
+        """
+        Scan-Mode EIN/AUS schalten:
+        - Im Scan-Mode verhält sich die GUI wie bei Repeat-Sweep (Live-Polling).
+        - Automatisch mit dem Wavegen verbinden und Start-Freq abfragen.
+        """
         if self.connection_state.get() != "connected":
             messagebox.showerror("Error", "Please connect OSA first!")
             return
-    
+
         # Modus umschalten
         self.scan_mode = not self.scan_mode
         if self.scan_mode:
-            # Enter Scan Mode → OSA in Repeat schalten + live polling starten
             append_event(self.event_log, self.log_text, "INFO", "Enter Scan Mode")
             self.scanmode_btn.config(text="Scan Mode ON", bg="yellow")
             self.single_btn.config(state="disabled")
             self.repeat_btn.config(state="disabled")
-    
-            # OSA in Repeat-Mode schalten
-            append_event(self.event_log, self.log_text, "SEND", "SRT")
-            self.controller.osa.write("SRT")
-    
-            # Mit Wavegen verbinden, falls nötig
+
+            # laufendes Live-Polling stoppen
+            self.repeat_abort_flag.set()
+            self.repeat_running = False
+
+            # WAVEGEN: verbinden falls nötig
             if getattr(self.wavegen_controller, "gen", None) is None:
                 try:
                     ip = self.wg_ip.get().strip()
                     self.wavegen_controller.connect(ip)
+                    append_event(self.event_log, self.log_text, "INFO", f"Wavegen connected @ {ip}")
                     self.wg_connect_btn.config(text="Disconnect WG", bg="green")
                 except Exception as e:
                     messagebox.showerror("Wavegen Error", f"Connection failed: {e}")
-                    # Modus wieder ausschalten
+                    # Modus rückgängig machen
                     self.scan_mode = False
                     self.scanmode_btn.config(text="Scan Mode OFF", bg="lightgray")
                     self.single_btn.config(state="normal")
                     self.repeat_btn.config(state="normal")
                     return
-    
-            # Aktuelle Frequenz abfragen (mit Logging)
+
+            # aktuelle Freq vom Wavegen abfragen
             append_event(self.event_log, self.log_text, "SEND", "SOUR1:FREQ?")
             try:
                 resp = self.wavegen_controller.query("SOUR1:FREQ?")
@@ -693,64 +675,58 @@ class OSAGUI(ttk.Frame):
             except Exception as e:
                 append_event(self.event_log, self.log_text, "ERROR", f"Freq query failed: {e}")
                 f0 = 0.0
-    
-            # In das Feld eintragen
-            self.curr_freq_var.set(f0)
-    
-            # Scan-Felder vorbelegen
+
+            # Felder vorbelegen
+            self.curr_freq_var.set(f"{f0:.3f}")
+            self.curr_freq_label.config(text=f"{f0:.3f} Hz")
             self.scan_start.delete(0, tk.END)
             self.scan_start.insert(0, f"{f0-1:.3f}")
             self.scan_end.delete(0, tk.END)
             self.scan_end.insert(0, f"{f0+1:.3f}")
-    
-            # Live-Polling starten
+
+            # Live-Polling wieder starten
+            self.repeat_abort_flag.clear()
             self.repeat_running = True
-            self.abort_flag.clear()
             threading.Thread(target=self.repeat_polling_loop, daemon=True).start()
-    
-            # Scan-Frame anzeigen
+
+            # Scan-Frame einblenden
             self.scan_frame.grid()
-    
+
         else:
-            # Exit Scan Mode → Live-Polling stoppen
             append_event(self.event_log, self.log_text, "INFO", "Exit Scan Mode")
             self.scanmode_btn.config(text="Scan Mode OFF", bg="lightgray")
             self.scan_frame.grid_remove()
-    
-            # Live-Polling abbrechen
-            self.abort_flag.set()
+
+            self.repeat_abort_flag.set()
             self.repeat_running = False
-    
-            # Buttons wieder aktivieren
             self.single_btn.config(state="normal")
             self.repeat_btn.config(state="normal")
 
-    def _transfer_freq(self):
-        current_label_freq = self.curr_freq_label.cget("text").replace(" Hz", "")
-        self.curr_freq_var.set(current_label_freq)
-        
-    def _manual_freq_entry(self, _event=None):
-        try:
-            freq = float(self.curr_freq_var.get())
-            self.wavegen_controller.write(f"SOUR1:FREQ {freq}")
-            append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {freq}")
-            self.curr_freq_label.config(text=f"{freq:.3f} Hz")
-        except Exception as e:
-            append_event(self.event_log, self.log_text, "ERROR", f"Invalid manual freq entry: {e}")
-            messagebox.showerror("Invalid Entry", "Please enter a valid frequency in Hz.")
 
-
-    # ─── Scan mit Wavegen ─────────────────────────────────────────────────────
     def start_scan(self):
+        """
+        Einmal-Scan von self._scan_f0 bis self._scan_f1 in Schritten self._scan_df.
+        Stoppt das Live-Polling, macht pro Schritt einen Single-Sweep, plottet,
+        und startet danach das Live-Polling wieder.
+        """
+        append_event(self.event_log, self.log_text, "BUTTON", "Start Scan pressed")
+
         if not self.scan_mode:
             messagebox.showerror("Error", "Enable Scan Mode first!")
             return
 
-        # Live-Polling unterbrechen
-        self.abort_flag.set()
+        # 1) Live-Polling sauber beenden
+        self.repeat_abort_flag.set()
         self.repeat_running = False
 
-        # Jetzt pro Frequenz einen Single Sweep
+        # 2) OSA aus Repeat-Mode holen
+        try:
+            append_event(self.event_log, self.log_text, "SEND", "SST")
+            self.controller.osa.write("SST")
+        except Exception as e:
+            append_event(self.event_log, self.log_text, "ERROR", f"SST failed: {e}")
+
+        # 3) Scan-Parameter einlesen
         try:
             self._scan_f0 = float(self.scan_start.get())
             self._scan_f1 = float(self.scan_end.get())
@@ -758,56 +734,76 @@ class OSAGUI(ttk.Frame):
         except ValueError:
             messagebox.showerror("Scan error", "Invalid frequency parameters")
             return
-        
-        self.scan_running = True
+
+        # 4) Scan starten
+        self.scan_abort_flag.clear()
         threading.Thread(target=self._scan_thread, daemon=True).start()
 
+
     def _scan_thread(self):
+        """
+        Arbeitet pro Frequenzschritt:
+         - Wavegen setzen
+         - Single-Sweep am OSA (*CLS, SSI, *OPC?, DCA?, DMA?)
+         - Plot + Peak
+        Am Ende: "Scan finished" und Restart des Live-Polling.
+        """
         osa = self.controller.osa
         f = self._scan_f0
         df = self._scan_df
-        while self.scan_running and f <= self._scan_f1:
-            append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {f}")
-            try:
-                self.wavegen_controller.write(f"SOUR1:FREQ {f}")
-            except:
-                pass
-            self.master.after(0, lambda v=f: self.curr_freq_var.set(round(v,3)))
 
-            append_event(self.event_log, self.log_text, "SEND", "*CLS")
-            osa.write("*CLS")
-            append_event(self.event_log, self.log_text, "SEND", "SSI")
-            osa.write("SSI")
-            try:
-                osa.query("*OPC?")
-            except:
-                pass
+        try:
+            while not self.scan_abort_flag.is_set() and f <= self._scan_f1:
+                # Wavegen setzen
+                if getattr(self.wavegen_controller, "gen", None):
+                    try:
+                        self.wavegen_controller.write(f"SOUR1:FREQ {f}")
+                        append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {f}")
+                        append_event(self.event_log, self.log_text, "RESPONSE", f"Wavegen set to {f:.3f} Hz")
+                    except Exception as e:
+                        append_event(self.event_log, self.log_text, "ERROR", f"Wavegen write failed: {e}")
+                else:
+                    append_event(self.event_log, self.log_text, "WARN", "Wavegen not connected")
 
-            try:
+                # Single-Sweep
+                append_event(self.event_log, self.log_text, "SEND", "*CLS"); osa.write("*CLS")
+                append_event(self.event_log, self.log_text, "SEND", "SSI"); osa.write("SSI")
+                append_event(self.event_log, self.log_text, "SEND", "*OPC?")
+                resp = osa.query("*OPC?"); append_event(self.event_log, self.log_text, "RESPONSE", resp.strip())
+
+                # DCA?
                 append_event(self.event_log, self.log_text, "SEND", "DCA?")
-                dca = osa.query("DCA?")
-                append_event(self.event_log, self.log_text, "RESPONSE", dca.strip())
+                dca = osa.query("DCA?"); append_event(self.event_log, self.log_text, "RESPONSE", dca.strip())
                 staw, stow, npts = map(float, dca.split(","))
                 wl = np.linspace(staw, stow, int(npts))
+
+                # DMA?
                 append_event(self.event_log, self.log_text, "SEND", "DMA?")
-                dbm = np.fromstring(osa.query("DMA?"), dtype=float, sep="\r\n")
-                append_event(self.event_log, self.log_text, "RESPONSE", "<binary>")
+                raw = osa.query("DMA?"); append_event(self.event_log, self.log_text, "RESPONSE", "<binary>")
+                dbm = np.fromstring(raw, dtype=float, sep="\r\n")
                 lin = 10 ** (dbm / 10)
-            except Exception as e:
-                self.master.after(0, lambda e=e: self.error_var.set(f"Data read error: {e}"))
-                f += df
-                continue
 
-            idx = int(np.nanargmax(dbm))
-            val, wl0 = dbm[idx], wl[idx]
-            self.master.after(0, lambda v=val, w=wl0, f=f: self._set_peak(v, w, f))
-            self.master.after(0, lambda w=wl, ln=lin, db=dbm: self.plot_results(w, ln, db, live=True))
+                # Peak & Plot über main-Thread
+                idx = int(np.nanargmax(dbm))
+                val, wl0 = dbm[idx], wl[idx]
+                self.master.after(0, lambda v=val, w=wl0, f=f: self._set_peak(v, w, f))
+                self.master.after(0, lambda w=wl, ln=lin, db=dbm: self.plot_results(w, ln, db, live=False))
 
-            f += df
+                # Schritt vorwärts
+                f = round(f + df, 6)
+                time.sleep(0.3)
 
-        self.scan_running = False
-        self.master.after(0, self.start_repeat_sweep)
-        
+            # Ende
+            self.master.after(0, lambda: self.status_var.set("Scan finished"))
+
+        except Exception as e:
+            self.master.after(0, lambda: self.error_var.set(f"Scan error: {e}"))
+
+        finally:
+            # Live-Polling neu starten
+            self.repeat_abort_flag.clear()
+            self.repeat_running = True
+            threading.Thread(target=self.repeat_polling_loop, daemon=True).start()
 
 
     # ─── Plot-Update ─────────────────────────────────────────────────────────
@@ -850,9 +846,14 @@ class OSAGUI(ttk.Frame):
 
     # ─── Scan stoppen und Repeat zurück ───────────────────────────────────────
     def stop_scan(self):
-        self.scan_running = False
-        self.start_repeat_sweep()
-
+        append_event(self.event_log, self.log_text, "BUTTON", "Stop Scan pressed")
+        # Scan-Abbruch setzen; Repeat-Restart übernimmt _scan_thread finally
+        self.scan_abort_flag.set()
+        
+    def _finish_repeat(self):
+        self.progressbar.stop()
+        self.set_button_states("stopped")
+        
     # ─── Data & Plot Speichern ────────────────────────────────────────────────
     def save_data_npy(self):
         if self.last_wavelengths is None:
@@ -916,14 +917,6 @@ class OSAGUI(ttk.Frame):
                 ip = self.wg_ip.get().strip()
                 self.wavegen_controller.connect(ip)
                 self.wg_connect_btn.config(text="Disconnect WG", bg="green")
-                
-                # einmalige Aktualisierung der Frequenz bei Verbindung
-                resp = self.wavegen_controller.query("SOUR1:FREQ?")
-                freq = round(float(resp), 3)
-                self.curr_freq_var.set(f"{freq:.3f}")
-                self.curr_freq_label.config(text=f"{freq:.3f} Hz")
-                append_event(self.event_log, self.log_text, "RESPONSE", f"Wavegen frequency set to {freq:.3f} Hz")
-    
             except Exception as e:
                 messagebox.showerror("Wavegen Error", f"Connection failed: {e}")
         else:
@@ -932,7 +925,6 @@ class OSAGUI(ttk.Frame):
                 self.wg_connect_btn.config(text="Connect WG", bg="red")
             except Exception as e:
                 messagebox.showerror("Wavegen Error", f"Disconnection failed: {e}")
-
 
     def toggle_wavegen_panel(self):
         if self.wavegen_embed.winfo_ismapped():
@@ -944,6 +936,16 @@ class OSAGUI(ttk.Frame):
                                               controller=self.wavegen_controller)
                 self.wavegen_gui.pack(fill="both", expand=True)
             self.wavegen_embed.grid()
+            
+    def _manual_freq_entry(self, _event=None):
+        try:
+            freq = float(self.curr_freq_var.get())
+            self.wavegen_controller.write(f"SOUR1:FREQ {freq}")
+            append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {freq}")
+            self.curr_freq_label.config(text=f"{freq:.3f} Hz")
+        except Exception as e:
+            append_event(self.event_log, self.log_text, "ERROR", f"Invalid manual freq entry: {e}")
+            messagebox.showerror("Invalid Entry", "Please enter a valid frequency in Hz.")
 
     # ─── Peak-Handling ───────────────────────────────────────────────────────
     def _set_peak(self, val_dbm, wl_nm, freq_hz=0.0):
@@ -954,19 +956,20 @@ class OSAGUI(ttk.Frame):
             self._max_peak_dbm = val_dbm
             self.max_peak_var.set(text)
 
+
     def _reset_max_peak(self):
         self._max_peak_dbm = -np.inf
         self.max_peak_var.set("Max Peak: -- dBm @ -- nm, -- Hz")
 
     # ─── Scan Frequency Adjustment ────────────────────────────────────────────
     def adjust_scan_freq(self, step):
-        new_f = self.curr_freq_var.get() + step
+        new_f = float(self.curr_freq_var.get()) + step
         self.curr_freq_var.set(new_f)
         append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {new_f}")
         self.wavegen_controller.write(f"SOUR1:FREQ {new_f}")
 
     def scale_scan_freq(self, factor):
-        new_f = self.curr_freq_var.get() * factor
+        new_f = float(self.curr_freq_var.get()) * factor
         self.curr_freq_var.set(new_f)
         append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {new_f}")
         self.wavegen_controller.write(f"SOUR1:FREQ {new_f}")
@@ -974,10 +977,33 @@ class OSAGUI(ttk.Frame):
     # ─── Log speichern ───────────────────────────────────────────────────────
     def _save_event_log(self):
         save_event_log(self.event_log)
+        
+    def safe_after(self, delay_ms, callback):
+        try:
+            if self.master.winfo_exists():
+                self.master.after(delay_ms, callback)
+        except RuntimeError:
+            pass
+        
+# Logger so konfigurieren, dass er bei Programmstart die Datei leert
+logging.basicConfig(
+    filename='event_log.txt',
+    filemode='w',                # 'w' leert die Datei beim Öffnen
+    level=logging.INFO,
+    format='[%(asctime)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+
+# Monkey-patch: jedes Mal, wenn append_event gerufen wird, loggen wir es
+_orig_append_event = append_event
+def append_event(ev_list, text_widget, ev_type, msg):
+    _orig_append_event(ev_list, text_widget, ev_type, msg)
+    logging.info(f"{ev_type}: {msg}")
+    
 
     # ─── Aufräumen bei Schließen ─────────────────────────────────────────────
     def on_closing(self):
-        self.abort_flag.set()
+        self.scan_abort_flag.set()
         try:
             if self.controller.osa:
                 append_event(self.event_log, self.log_text, "SEND", "SST")
@@ -985,3 +1011,4 @@ class OSAGUI(ttk.Frame):
         except:
             pass
         self.master.destroy()
+
