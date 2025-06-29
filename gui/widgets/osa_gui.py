@@ -11,7 +11,7 @@ from controllers.osa_controller import OSAController
 from utils.helpers import (
     CreateToolTip,
     integration_string_to_hz,
-    SMT_OPTIONS,
+    #smt_points,
     append_event,
     save_event_log,
     _OSA_make_filename
@@ -32,10 +32,7 @@ class OSAGUI(ttk.Frame):
         self.connection_state = tk.StringVar(value="disconnected")
 
         # Sweep-Parameter
-        self.resolutions   = ["1.0","0.5","0.2","0.1","0.07","0.05","0.03"]
-        self.integrations  = ["1MHz","100kHz","10kHz","1kHz","100Hz","10Hz"]
-        self.samp_points   = ["51","101","201","251","501","1001","2001","5001","10001","20001","50001"]
-        self.spans         = ["1200","1000","500","200","100","50","20","10","5","2","1"]
+        
 
         self.central_wl    = tk.DoubleVar(value=1548.5)
         self.span          = tk.StringVar(value="2")
@@ -63,7 +60,7 @@ class OSAGUI(ttk.Frame):
 
         # Peak-Anzeige
         self.current_peak_var = tk.StringVar(value="Peak: -- dBm @ -- nm, -- Hz")
-        self._max_peak_dbm = -np.inf
+        self._max_peak_dbm = 0
         self.max_peak_var  = tk.StringVar()
         self._reset_max_peak()
 
@@ -103,18 +100,15 @@ class OSAGUI(ttk.Frame):
             param.columnconfigure(c*2, weight=0)
             param.columnconfigure(c*2+1, weight=1)
 
-        cmd_map = {"Span [nm]:":"SPN","Resolution [nm]:":"RES",
-                   "Integration:":"VBW","Sampling Points:":"MPT","Smooth:":"SMT"}
-        spin_map = {"Reference LvL [dBm]:":"RLV","Level Offset [dB]:":"LOFS"}
         specs = [
             ("Central WL [nm]:","entry", self.central_wl, 800, 1700),
-            ("Span [nm]:","combo", self.span, self.spans, None),
-            ("Resolution [nm]:","combo", self.resolution, self.resolutions, None),
-            ("Integration:","combo", self.integration, self.integrations, None),
-            ("Sampling Points:","combo", self.points, self.samp_points, None),
+            ("Span [nm]:","combo", self.span, self.controller.spans, None),
+            ("Resolution [nm]:","combo", self.resolution, self.controller.resolutions, None),
+            ("Integration:","combo", self.integration, self.controller.integrations, None),
+            ("Sampling Points:","combo", self.points, self.controller.samp_points, None),
             ("Reference LvL [dBm]:","spin", self.reference_lvl, -90, 30),
             ("Level Offset [dB]:","spin", self.level_offset, -30, 30),
-            ("Smooth:","combo", self.smooth_points, SMT_OPTIONS, None),
+            ("Smooth:","combo", self.smooth_points, self.controller.smt_points, None),
         ]
         row = 0
         for idx, (txt, typ, var, opt1, opt2) in enumerate(specs):
@@ -124,22 +118,22 @@ class OSAGUI(ttk.Frame):
                 e = tk.Entry(param, textvariable=var, width=10)
                 e.grid(row=row, column=col+1, sticky="w", padx=4, pady=4)
                 CreateToolTip(e, f"Valid {opt1}–{opt2} nm")
-                e.bind("<Return>",   lambda e, v=var: self.set_single_param("CNT", v.get()))
-                e.bind("<FocusOut>", lambda e, v=var: self.set_single_param("CNT", v.get()))
+                e.bind("<Return>",   lambda e, v=var: self.set_param("CNT", v.get()))
+                e.bind("<FocusOut>", lambda e, v=var: self.set_param("CNT", v.get()))
             elif typ == "combo":
                 # für Span erlauben wir auch eigene Eingabe
                 state = "normal" if txt == "Span [nm]:" else "readonly"
                 cb = ttk.Combobox(param, values=opt1, textvariable=var, width=10, state=state)
                 cb.grid(row=row, column=col+1, sticky="w", padx=4, pady=4)
                 cb.bind("<<ComboboxSelected>>",
-                        lambda e, v=var, cmd=cmd_map[txt]: self.set_single_param(cmd, v.get()))
+                        lambda e, v=var, cmd=self.controller.cmd_map[txt]: self.set_param(cmd, v.get()))
                 if txt == "Span [nm]:":
                     self.span_cb = cb
                     # bei Fokusverlust oder Enter den neuen Span-Wert setzen
                     self.span_cb.bind("<FocusOut>",
-                        lambda e: self.set_single_param("SPN", self.span.get()))
+                        lambda e: self.set_param("SPN", self.span.get()))
                     self.span_cb.bind("<Return>",
-                        lambda e: self.set_single_param("SPN", self.span.get()))
+                        lambda e: self.set_param("SPN", self.span.get()))
                 elif txt == "Resolution [nm]:":
                     self.resolution_cb = cb
                 elif txt == "Integration:":
@@ -151,10 +145,10 @@ class OSAGUI(ttk.Frame):
             else:
                 sb = tk.Spinbox(param, from_=opt1, to=opt2, increment=1.0,
                                 textvariable=var, width=10,
-                                command=lambda v=var, cmd=spin_map[txt]: self.set_single_param(cmd, v.get()))
+                                command=lambda v=var, cmd=self.controller.cmd_map[txt]: self.set_param(cmd, v.get()))
                 sb.grid(row=row, column=col+1, sticky="w", padx=4, pady=4)
                 sb.bind("<FocusOut>",
-                    lambda e, v=var, cmd=spin_map[txt]: self.set_single_param(cmd, v.get()))
+                    lambda e, v=var, cmd=self.controller.cmd_map[txt]: self.set_param(cmd, v.get()))
                 if txt == "Reference LvL [dBm]:":
                     self.ref_spin = sb
                 elif txt == "Level Offset [dB]:":
@@ -166,8 +160,8 @@ class OSAGUI(ttk.Frame):
         quality=tk.LabelFrame(param,text="Quality",padx=4,pady=4)
         quality.grid(row=row,column=0,columnspan=4,sticky="ew",pady=(10,0))
         self.quality_buttons=[]
-        for i,q in enumerate(("low","med","high")):
-            btn=ttk.Button(quality,text=q.capitalize(),
+        for i,q in enumerate(("low","Med","High")):
+            btn=ttk.Button(quality,text=q,
                            command=lambda q=q: self.apply_quality(q))
             btn.grid(row=0,column=i,padx=6,pady=2)
             self.quality_buttons.append(btn)
@@ -176,7 +170,7 @@ class OSAGUI(ttk.Frame):
         # Sweep Buttons + Progress
         btns=tk.Frame(param)
         btns.grid(row=row,column=0,columnspan=4,pady=(8,4))
-        self.single_btn=ttk.Button(btns,text="Single Sweep",command=self.start_single_sweep)
+        self.single_btn=ttk.Button(btns,text="Single Sweep",command=self.single_sweep)
         self.repeat_btn=ttk.Button(btns,text="Repeat Sweep",command=self.start_repeat_sweep)
         self.single_btn.pack(side="left",padx=6)
         self.repeat_btn.pack(side="left",padx=6)
@@ -366,7 +360,6 @@ class OSAGUI(ttk.Frame):
                 append_event(self.event_log, self.log_text, "RESPONSE", resp.strip())
                 var.set(cast(resp.strip()))
 
-            # optional RLV und LOFS
             try:
                 append_event(self.event_log, self.log_text, "SEND", "RLV?")
                 resp = osa.query("RLV?")
@@ -387,7 +380,7 @@ class OSAGUI(ttk.Frame):
             self.error_var.set(f"Read failed: {e}")
 
     # ─── Einzelparameter setzen ─────────────────────────────────────────────────
-    def set_single_param(self, cmd, value):
+    def set_param(self, cmd, value):
         if self.connection_state.get() != "connected":
             return
         osa = self.controller.osa
@@ -428,9 +421,9 @@ class OSAGUI(ttk.Frame):
         self.resolution.set(res)
         self.integration.set(vbw)
         self.points.set(mpt)
-        self.set_single_param("RES", res)
-        self.set_single_param("VBW", vbw)
-        self.set_single_param("MPT", mpt)
+        self.set_param("RES", res)
+        self.set_param("VBW", vbw)
+        self.set_param("MPT", mpt)
         self.status_var.set(f"Quality: {quality}")
 
     # ─── Button Update ─────────────────────────────────────────────────────────
@@ -454,7 +447,7 @@ class OSAGUI(ttk.Frame):
 
 
     # ─── Single Sweep ──────────────────────────────────────────────────────────
-    def start_single_sweep(self):
+    def single_sweep(self):
         if self.sweep_running:
             self.abort_flag.set()
             self.set_button_states("stopped")

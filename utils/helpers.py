@@ -62,7 +62,7 @@ def integration_string_to_hz(integ_str):
     return mapping.get(integ_str, 1000)
 
 
-SMT_OPTIONS = ["OFF", "3", "5", "7", "9", "11"]
+
 
 
 
