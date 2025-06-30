@@ -9,6 +9,9 @@ def main():
     root = tk.Tk()
     root.title("AIO Control Modular")
     root.geometry("1200x900")
+    root.focus_force()
+    root.state("zoomed")
+
 
     # Controller erzeugen (können optional später mit Parametern instanziiert werden)
     scope_ctrl = ScopeController()
