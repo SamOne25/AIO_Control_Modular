@@ -1,0 +1,35 @@
+{
+  "timestamp": "2025-07-01 15:11:18.924117",
+  "resolution": "0.1",
+  "integration": "100HZ",
+  "span": "2",
+  "frequency": "411174.000000",
+  "points": "1001",
+  "offset": "0.0",
+  "reference_lvl": "0.0",
+  "central_wl": "1560.0",
+  "voltage": "20.0",
+  "fiberlen": "~25.0",
+  "scan_start": "-",
+  "scan_stop": "-",
+  "scan_step": "-",
+  "instrument": "Anritsu MS9740A",
+  "notes": "Sweep Data",
+  "date": "2025-07-01",
+  "time": "15:11:18",
+  "columns": [
+    "wavelength_nm",
+    "power_dbm",
+    "power_linear"
+  ],
+  "units": {
+    "wavelength_nm": "nm",
+    "power_dbm": "dBm",
+    "power_linear": "mW"
+  },
+  "fields": {
+    "1": "wavelength_nm, [nm]",
+    "2": "power_dbm, [dBm]",
+    "3": "power_linear, [mW]"
+  }
+}

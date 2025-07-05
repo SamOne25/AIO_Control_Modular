@@ -7,16 +7,20 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.ticker import MaxNLocator, AutoMinorLocator
 from scipy.signal import find_peaks
-
+import tkinter.simpledialog as simpledialog
 from controllers.osa_controller import OSAController
+
 from utils.helpers import (
     CreateToolTip,
     integration_string_to_hz,
-    #smt_points,
+    save_scan_data, 
+    save_linear_plot, 
+    save_dbm_plot,
     append_event,
     save_event_log,
-    _OSA_make_filename
-)
+    save_with_metadata,
+    get_lin_unit_and_data,
+    meta_daten)
 
 class OSAGUI(ttk.Frame):
     def __init__(self, parent, controller=None, wavegen_controller=None):
@@ -31,7 +35,7 @@ class OSAGUI(ttk.Frame):
         self.status_var = tk.StringVar(value="Status: Not connected")
         self.error_var = tk.StringVar(value="")
         self.connection_state = tk.StringVar(value="disconnected")
-        self.debug_modus = tk.BooleanVar(value=False)
+        
 
         # Sweep-Parameter
         
@@ -44,15 +48,22 @@ class OSAGUI(ttk.Frame):
         self.smooth_points = tk.StringVar(value="OFF")
         self.reference_lvl = tk.DoubleVar(value=0.0)
         self.level_offset  = tk.DoubleVar(value=0.0)
+        self.voltage       = tk.StringVar(value="20.0")   # Default-Spannung
+        self.fiberlen      = tk.StringVar(value="~25.0")   # Default-Faserlänge
+        self.pulse_width   = tk.StringVar(value="100")    # Default 100 ns
         
         # Debug-Modus: alle Events sammeln
+        self.debug_modus = tk.BooleanVar(value=False)
         self.event_log = []
 
         # Sweep-Kontrolle
+        self.single_sweep_freq = None
         self.sweep_running  = False
         self.repeat_running = False
         self.repeat_abort     = threading.Event()
         self.scan_abort     = threading.Event()
+        self.pause_event   = threading.Event()
+        self.scan_running  = False    # Thread aktiv (auch wenn gerade pausiert)
 
         # Spec-Figure (gemeinsam für dBm und linear) + Scan-Figure
         self.fig_spec, self.ax_spec = plt.subplots(figsize=(6,4), dpi=150)
@@ -65,7 +76,7 @@ class OSAGUI(ttk.Frame):
         self.current_plot_scale = "dBm"
 
         # Peak-Anzeige
-        self.current_peak_var = tk.StringVar(value="Peak: -- dBm @ -- nm, -- Hz")
+        self.current_peak_var = tk.StringVar(value="-- dBm @ -- nm, -- Hz")
         self._max_peak_dbm = 0
         self.max_peak_var  = tk.StringVar()
         self._reset_max_peak()
@@ -88,7 +99,7 @@ class OSAGUI(ttk.Frame):
        
         
         #Peak finder
-        self.min_peak_var     = tk.DoubleVar(value=-80.0)  # Mindestpegel in dBm
+        self.min_peak_var     = tk.DoubleVar(value=-70.0)  # Mindestpegel in dBm
         self.min_distance_var = tk.IntVar(   value=1   )  # Mindestens so viele Messpunkte Abstand
         self.show_peaks_only  = tk.BooleanVar(value=False)
         self.peaks_idx        = []  # wird später von find_peaks befüllt
@@ -120,6 +131,20 @@ class OSAGUI(ttk.Frame):
         self.wg_connect_btn = tk.Button(top, text="Connect WG", width=12, bg="red",
                                         command=self.toggle_wavegen_connection)
         self.wg_connect_btn.grid(row=0, column=5, padx=(10,0))
+        self.debug_btn = tk.Button(top, text="Debug Modus: Off", width=15, command=self.toggle_debugmodus)
+        self.debug_btn.grid(row=0, column=6, padx=(10,0))
+               
+        # Voltage-Feld
+        tk.Label(top, text="Voltage [V]:") \
+          .grid(row=0, column=7, sticky="e", padx=(20,2))
+        tk.Entry(top, textvariable=self.voltage, width=8) \
+          .grid(row=0, column=8, sticky="w")
+        
+        # Fiber Length-Feld
+        tk.Label(top, text="Fiber Len [km]:") \
+          .grid(row=0, column=9, sticky="e", padx=(20,2))
+        tk.Entry(top, textvariable=self.fiberlen, width=8) \
+          .grid(row=0, column=10, sticky="w")
 
         # Sweep Parameters
         param = tk.LabelFrame(main, text="Sweep Parameters", padx=8, pady=10)
@@ -199,9 +224,7 @@ class OSAGUI(ttk.Frame):
         btns=tk.Frame(param)
         btns.grid(row=row,column=0,columnspan=4,pady=(8,4))
         self.single_btn=ttk.Button(btns,text="Single Sweep",command=self.single_sweep)
-        self.repeat_btn=ttk.Button(btns,text="Repeat Sweep",command=self.start_repeat_sweep)
         self.single_btn.pack(side="left",padx=6)
-        self.repeat_btn.pack(side="left",padx=6)
         self.scanmode_btn=tk.Button(btns,text="Scan Mode OFF",bg="lightgray",command=self.toggle_scan_mode)
         self.scanmode_btn.pack(side="left",padx=6)
         row+=1
@@ -258,10 +281,23 @@ class OSAGUI(ttk.Frame):
         scan_row += 1
 
         # Start / Stop Scan Buttons
-        tk.Button(self.scan_frame, text="Start Scan", command=self.start_scan)\
-            .grid(row=scan_row, column=0, padx=6, pady=4, sticky="w")
-        tk.Button(self.scan_frame, text="Stop Scan", command=lambda:[self.stop_scan(), self.start_repeat_sweep()])\
-            .grid(row=scan_row, column=1, padx=6, pady=4, sticky="w")
+        self.scan_btn = tk.Button(
+            self.scan_frame,
+            text="Run/Pause",
+            bg="green",
+            fg="white",
+            command=self.toggle_scan_run_pause
+        )
+        self.scan_btn.grid(row=scan_row, column=0, padx=6, pady=4, sticky="w")
+        
+        self.stop_btn = tk.Button(
+            self.scan_frame,
+            text="Stop Scan",
+            bg="red",
+            fg="white",
+            command=self.stop_scan    # stop_scan setzt scan_abort und ruft start_repeat_sweep()
+        )
+        self.stop_btn.grid(row=scan_row, column=1, padx=6, pady=4, sticky="w")
         scan_row += 1
 
         # Peak Displays
@@ -284,7 +320,7 @@ class OSAGUI(ttk.Frame):
         # ─── Save Frame (Data & Plots) ────────────────────────────────────────────
         save_frame = tk.LabelFrame(param, text="Save", padx=8, pady=6)
         save_frame.grid(row=row+1, column=0, columnspan=4, sticky="ew", pady=(10,0))
-        ttk.Button(save_frame, text="Save Data (.npy)", command=self.save_data_npy).grid(row=0, column=0, padx=6)
+        ttk.Button(save_frame, text="Save Sweep (.npy/json)", command=self.save_sweep).grid(row=0, column=0, padx=6)
         ttk.Button(save_frame, text="Save Linear Plot", command=self.save_linear_plot).grid(row=0, column=1, padx=6)
         ttk.Button(save_frame, text="Save dBm Plot", command=self.save_dbm_plot).grid(row=0, column=2, padx=6)
 
@@ -340,11 +376,24 @@ class OSAGUI(ttk.Frame):
         settings_frame = tk.Frame(self.scan_tab)
         settings_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0,4))
         
-        # statt Entry für min_peak_var z.B.:
-        tk.Scale(settings_frame, variable=self.min_peak_var, from_=-120, to=0, resolution=0.5,
-                 orient="horizontal", label="Min. Pegel [dBm]").pack(side="left", padx=4)
-        # Und analog für min_distance_var.
+        # Min. Pegel Slider
+        tk.Scale(
+            settings_frame,
+            variable=self.min_peak_var,
+            from_=-120, to=0, resolution=0.5,
+            orient="horizontal",
+            label="Min. Pegel [dBm]",
+            command=lambda v: self._on_peak_params_changed()
+        ).pack(side="left", padx=4)
         
+        tk.Scale(
+            settings_frame,
+            variable=self.min_distance_var,
+            from_=1, to=20, resolution=1,
+            orient="horizontal",
+            label="Min. Abstand [Pkt]",
+            command=lambda v: self._on_peak_params_changed()
+        ).pack(side="left", padx=4)
         """
         # Mindest-Pegel
         tk.Label(settings_frame, text="Min. Pegel [dBm]:").pack(side="left")
@@ -363,9 +412,15 @@ class OSAGUI(ttk.Frame):
         # Export-Button
         tk.Button(
             settings_frame,
-            text="Peaks exportieren",
+            text="save peaks only",
             command=self._export_peaks_numpy
         ).pack(side="right")
+        #Save Scan button
+        tk.Button(
+            settings_frame,
+            text="Save Scan (.npz/json)",
+            command=self.save_full_scan
+        ).pack(side="right", padx=4)
         
         # 2a) Filter-Eingabe
         """
@@ -419,7 +474,8 @@ class OSAGUI(ttk.Frame):
 
     def toggle_connection(self):
         if self.connection_state.get() == "disconnected":
-            self.connect_osa()
+            if not self.debug_modus.get():
+                self.connect_osa()
         else:
             self.disconnect_osa()
         self.update_conn_btn()
@@ -557,10 +613,6 @@ class OSAGUI(ttk.Frame):
             # Single-Sweep läuft
             self.single_btn.config(text="Stop", state="normal")
             self.repeat_btn.config(text="Repeat Sweep", state="disabled")
-        elif mode == "repeat":
-            # Repeat-Sweep läuft
-            self.single_btn.config(text="Single Sweep", state="disabled")
-            self.repeat_btn.config(text="Stop", state="normal")
         else:
             # Beide gestoppt
             self.single_btn.config(text="Single Sweep", state="normal")
@@ -569,16 +621,33 @@ class OSAGUI(ttk.Frame):
 
     # ─── Single Sweep ──────────────────────────────────────────────────────────
     def single_sweep(self):
+        # Beim Start eines Single-Sweeps die Wavegen-Frequenz abfragen und speichern
+        try:
+            resp = self.wavegen_controller.query("SOUR1:FREQ?")
+            self.single_sweep_freq = float(resp)
+        except Exception:
+            self.single_sweep_freq = None
+
+        # In der Statuszeile anzeigen, falls erfolgreich
+        if self.single_sweep_freq is not None:
+            self.status_var.set(f"Single Sweep @ {self.single_sweep_freq:.6f} Hz")
+
+        # Wenn gerade ein Sweep läuft, abbrechen
         if self.sweep_running:
             self.repeat_abort.set()
             self.set_button_states("stopped")
             self.status_var.set("Sweep stopped.")
             return
+
+        # Sweep-Flags setzen und Buttons umschalten
         self.sweep_running = True
         self.repeat_abort.clear()
         self.set_button_states("single")
         self.progressbar["value"] = 0
+
+        # Single-Sweep im Hintergrund starten
         threading.Thread(target=self.single_sweep_thread, daemon=True).start()
+
 
     def single_sweep_thread(self):
         try:
@@ -743,7 +812,7 @@ class OSAGUI(ttk.Frame):
         
     # ─── Scan Mode ────────────────────────────────────────────────────────────
     def toggle_scan_mode(self):
-        if self.connection_state.get() != "connected":
+        if self.connection_state.get() != "connected" and not self.debug_modus.get():
             messagebox.showerror("Error", "Please connect OSA first!")
             return
     
@@ -753,12 +822,12 @@ class OSAGUI(ttk.Frame):
             # Enter Scan Mode → OSA in Repeat schalten + live polling starten
             append_event(self.event_log, self.log_text, "INFO", "Enter Scan Mode")
             self.scanmode_btn.config(text="Scan Mode ON", bg="yellow")
-            self.single_btn.config(state="disabled")
-            self.repeat_btn.config(state="disabled")
+            self.single_btn.config(state="normal")
     
             # OSA in Repeat-Mode schalten
             append_event(self.event_log, self.log_text, "SEND", "SRT")
-            self.controller.osa.write("SRT")
+            if not self.debug_modus.get(): 
+                self.controller.osa.write("SRT")
     
             # Mit Wavegen verbinden, falls nötig
             if getattr(self.wavegen_controller, "gen", None) is None:
@@ -769,11 +838,12 @@ class OSAGUI(ttk.Frame):
                 except Exception as e:
                     messagebox.showerror("Wavegen Error", f"Connection failed: {e}")
                     # Modus wieder ausschalten
-                    self.scan_mode = False
-                    self.scanmode_btn.config(text="Scan Mode OFF", bg="lightgray")
-                    self.single_btn.config(state="normal")
-                    self.repeat_btn.config(state="normal")
-                    return
+                    if not self.debug_modus.get():
+                        self.scan_mode = False
+                        self.scanmode_btn.config(text="Scan Mode OFF", bg="lightgray")
+                        self.single_btn.config(state="normal")
+                        self.repeat_btn.config(state="normal")
+                        return
     
             # Aktuelle Frequenz abfragen (mit Logging)
             append_event(self.event_log, self.log_text, "SEND", "SOUR1:FREQ?")
@@ -814,8 +884,28 @@ class OSAGUI(ttk.Frame):
     
             # Buttons wieder aktivieren
             self.single_btn.config(state="normal")
-            self.repeat_btn.config(state="normal")
 
+    def toggle_scan_run_pause(self):
+        # falls noch nie gestartet oder nach Stop: neu starten
+        if not self.scan_running and not self.pause_event.is_set():
+            self.pause_event.clear()
+            self.scan_abort.clear()
+            self.scan_running = True
+            self.scan_btn.config(text="Run/Pause", bg="green", fg="white")
+            threading.Thread(target=self._scan_thread, daemon=True).start()
+            return
+    
+        # wenn gerade läuft → Pause
+        if self.scan_running and not self.pause_event.is_set():
+            self.pause_event.set()
+            self.scan_btn.config(text="Run/Paused", bg="yellow", fg="black")
+            return
+    
+        # wenn pausiert → Resume
+        if self.scan_running and self.pause_event.is_set():
+            self.pause_event.clear()
+            self.scan_btn.config(text="Run/Pause", bg="green", fg="white")
+            return
 
     # ─── Scan mit Wavegen ─────────────────────────────────────────────────────
     def start_scan(self):
@@ -838,6 +928,7 @@ class OSAGUI(ttk.Frame):
             messagebox.showerror("Scan error", "Invalid frequency parameters")
             return
         
+        # Scan-Flags initialisieren
         self.scan_running = True
         self.scan_abort.clear()
         time.sleep(0.5)
@@ -849,6 +940,9 @@ class OSAGUI(ttk.Frame):
         f = self._scan_f0
         df = self._scan_df
         while not self.scan_abort.is_set() and f <= self._scan_f1:
+            # --- hier warten, solange wir im Pausen-Modus sind ---
+            while self.pause_event.is_set() and not self.scan_abort.is_set():
+                time.sleep(0.1)
             self.master.after(0, lambda: append_event(self.event_log, self.log_text, "SEND", f"SOUR1:FREQ {f}"))
             try:
                 self.wavegen_controller.write(f"SOUR1:FREQ {f}")
@@ -899,7 +993,10 @@ class OSAGUI(ttk.Frame):
         
     # ─── Scan stoppen und Repeat zurück ───────────────────────────────────────
     def stop_scan(self):
+        # Scan-Thread abbrechen
+        self.scan_abort.set()
         self.scan_running = False
+        # danach wieder in den Repeat-Modus gehen
         self.start_repeat_sweep()
 
     # ─── Plot-Update ─────────────────────────────────────────────────────────
@@ -961,48 +1058,45 @@ class OSAGUI(ttk.Frame):
             #self.notebook.select(self.plot_spec_tab)
             self.plot_results(self.last_wavelengths, self.last_power_lin, self.last_power_dbm)
             
-    """        
     def update_scan_plot(self):
+        # 1) Achse leeren
         self.ax_scan.clear()
-        self.ax_scan.plot(self._scan_freqs, self._scan_peaks, marker='o')
-        self.ax_scan.set_xlabel("Frequency (Hz)")
-        self.ax_scan.set_ylabel("Peak (dBm)")
-        self.ax_scan.grid(True)
-        self.fig_scan.tight_layout()
-        self.canvas_scan.draw()
-    """
-    def update_scan_plot(self):
-        self.ax_scan.clear()
+    
+        # 2) Scan-Limits lesen und als X-Achse setzen
+        try:
+            f0 = float(self.scan_start.get())
+            f1 = float(self.scan_end.get())
+            self.ax_scan.set_xlim(f0, f1)
+        except ValueError:
+            # falls ungültig, bleiben die Limits automatisch
+            pass
+    
+        # 3) Daten plotten
         self.ax_scan.plot(self._scan_freqs, self._scan_peaks, linestyle='--', marker='o')
     
-        # Peaks mit Mindesthöhe und -abstand detektieren
-        peaks_idx, props = find_peaks(
+        # 4) Peaks nach Slider-Werten markieren
+        height = self.min_peak_var.get()
+        dist   = self.min_distance_var.get()
+        peaks_idx, _ = find_peaks(
             self._scan_peaks,
-            height=-80,      # z.B. nur Peaks > –80 dBm
-            distance=1       # mindestens 1 Messpunkt auseinander
+            height=height,
+            distance=dist
         )
-    
-        # jeden Peak markieren und Wellenlänge als Text daneben
         for i in peaks_idx:
             f, p, wl = self._scan_freqs[i], self._scan_peaks[i], self._scan_wl[i]
             self.ax_scan.plot(f, p, 'ro')
-            self.ax_scan.text(
-                f, p + 0.5, f"{wl:.2f} nm",
-                ha='center', va='bottom', fontsize=6
-            )
+            self.ax_scan.text(f, p+0.5, f"{wl:.2f} nm",
+                              ha='center', va='bottom', fontsize=6)
     
+        # 5) Achsenbeschriftungen und Grid
         self.ax_scan.set_xlabel("Frequenz (Hz)")
         self.ax_scan.set_ylabel("Peak (dBm)")
         self.ax_scan.grid(True)
+    
+        # 6) zeichnen
         self.fig_scan.tight_layout()
         self.canvas_scan.draw()
-        self._detect_peaks()
-        for i in self.peaks_idx:
-            f, p, wl = self._scan_freqs[i], self._scan_peaks[i], self._scan_wl[i]
-            self.ax_scan.plot(f, p, 'ro')  # rotes Kreuz
-            self.ax_scan.text(f, p+0.5, f"{wl:.2f}nm",
-                              ha='center', va='bottom', fontsize=6)
-    
+
     def _filter_scan_table(self, event=None):
         """Filtert die Einträge in self.scan_table nach filter_var."""
         text = self.filter_var.get().lower()
@@ -1047,10 +1141,9 @@ class OSAGUI(ttk.Frame):
                     f"{f:.3f}", f"{p:.2f}", f"{wl:.3f}"
                 ))
                 
-    def _on_peak_params_changed(self):
-        # 1) Tabelle updaten
+    def _on_peak_params_changed(self, _=None):
+        # hier kommt deine Logik: Tabelle aktualisieren, Plot neuzeichnen …
         self._refresh_scan_table()
-        # 2) Plot mit neuen Markierungen neuzeichnen
         self.update_scan_plot()
 
     def _export_peaks_numpy(self):
@@ -1090,65 +1183,8 @@ class OSAGUI(ttk.Frame):
             title="Save scan plot as .png"
         )
         if fn_plot:
-            self.scan_fig.savefig(fn_plot, dpi=300, bbox_inches="tight")
+            self.fig_scan.savefig(fn_plot, dpi=300, bbox_inches="tight")
 
-
-
-    # ─── Data & Plot Speichern ────────────────────────────────────────────────
-    def save_data_npy(self):
-        if self.last_wavelengths is None:
-            messagebox.showwarning("No Data", "Run a sweep first!")
-            return
-        default = _OSA_make_filename(
-            central_wl    = self.central_wl.get(),
-            span          = self.span.get(),
-            resolution    = self.resolution.get(),
-            integration   = self.integration.get(),
-            points        = self.points.get(),
-            suffix        = "",
-            ext           = ".npy"
-        )
-        fname = filedialog.asksaveasfilename(
-            defaultextension=".npy",
-            initialfile=default,
-            filetypes=[("NumPy","*.npy")]
-        )
-        if not fname: return
-        arr = np.vstack((self.last_wavelengths,
-                         self.last_power_dbm,
-                         self.last_power_lin)).T
-        np.save(fname, arr)
-        messagebox.showinfo("Saved", f"Data saved: {fname}")
-    
-    def save_linear_plot(self):
-        default = _OSA_make_filename(
-            self.central_wl.get(), self.span.get(), self.resolution.get(),
-            self.integration.get(), self.points.get(),
-            suffix="_lin", ext=".png"
-        )
-        fname = filedialog.asksaveasfilename(
-            defaultextension=".png",
-            initialfile=default,
-            filetypes=[("PNG","*.png")]
-        )
-        if not fname: return
-        self.fig_lin.savefig(fname, dpi=600, bbox_inches='tight')
-        messagebox.showinfo("Saved", f"Linear plot saved: {fname}")
-    
-    def save_dbm_plot(self):
-        default = _OSA_make_filename(
-            self.central_wl.get(), self.span.get(), self.resolution.get(),
-            self.integration.get(), self.points.get(),
-            suffix="_dbm", ext=".png"
-        )
-        fname = filedialog.asksaveasfilename(
-            defaultextension=".png",
-            initialfile=default,
-            filetypes=[("PNG","*.png")]
-        )
-        if not fname: return
-        self.fig_dbm.savefig(fname, dpi=600, bbox_inches='tight')
-        messagebox.showinfo("Saved", f"dBm plot saved: {fname}")
 
     # ─── Wavegen Control ─────────────────────────────────────────────────────
     def toggle_wavegen_connection(self):
@@ -1156,7 +1192,7 @@ class OSAGUI(ttk.Frame):
             try:
                 ip = self.wg_ip.get().strip()
                 self.wavegen_controller.connect(ip)
-                self.wg_connect_btn.config(text="Disconnect WG", bg="green")
+                self.wg_connect_btn.config(text="Disconnect WG", bg="green", fg="white")
             except Exception as e:
                 messagebox.showerror("Wavegen Error", f"Connection failed: {e}")
         else:
@@ -1188,7 +1224,7 @@ class OSAGUI(ttk.Frame):
 
     def _reset_max_peak(self):
         self._max_peak_dbm = -np.inf
-        self.max_peak_var.set("Max Peak: -- dBm @ -- nm, -- Hz")
+        self.max_peak_var.set("-- dBm @ -- nm, -- Hz")
 
     # ─── Scan Frequency Adjustment ────────────────────────────────────────────
     def adjust_scan_freq(self, step):
@@ -1206,6 +1242,174 @@ class OSAGUI(ttk.Frame):
     # ─── Log speichern ───────────────────────────────────────────────────────
     def _save_event_log(self):
         save_event_log(self.event_log)
+        
+    def toggle_debugmodus(self):
+        enabled = self.debug_modus.get()
+        self.debug_modus.set(not enabled)
+        # Button-Beschriftung & Farbe anpassen
+        if not enabled:
+            self.debug_btn.config(text="Debugmodus ON",  bg="yellow", fg="black")
+        else:
+            self.debug_btn.config(text="Debugmodus OFF", bg="SystemButtonFace",       fg="black")
+
+    # ─── Wrapper für Daten speichern ─────────────────────────────────────────
+
+    def save_sweep(self):
+        # 1) Daten vorhanden?
+        if self.last_wavelengths.size == 0:
+            messagebox.showwarning("No Data", "Run a sweep first!")
+            return
+
+        # 2) Single-Sweep-Freq holen (oder per Dialog nachfragen)
+        try:
+            resp = self.wavegen_controller.query("SOUR1:FREQ?")
+            freq = f"{float(resp):.6f}"
+        except Exception:
+            freq_val = simpledialog.askfloat(
+                "Frequency Required",
+                "Could not read wavegen frequency.\nPlease enter frequency in Hz:",
+                minvalue=0.0
+            )
+            if freq_val is None:
+                messagebox.showwarning("No Frequency", "Frequency is required for single sweep.")
+                return
+            freq = f"{freq_val:.6f}"
+
+        # 3) Pulsbreite vom Wavegen holen (in s → umrechnen in ns)
+        try:
+            resp_pw = self.wavegen_controller.query("SOUR1:PULS:WIDT?")
+            pw_s = float(resp_pw)
+            pw_ns = pw_s * 1e9
+            pulse_width = f"{pw_ns:.3f}"
+        except Exception:
+            pw_val = simpledialog.askfloat(
+                "Pulse width required",
+                "Could not read pulse width from wavegen.\nPlease enter pulse width in ns:",
+                minvalue=0.0
+            )
+            if pw_val is None:
+                messagebox.showwarning("No Pulsewidth", "Pulse width is required for single sweep.")
+                return
+            pulse_width = f"{pw_val:.3f}"
+
+        # 4) Aus dBm → mW und dann in hübsche Einheit skalieren
+        raw_lin = 10 ** (self.last_power_dbm / 10)  # jetzt in mW
+        lin_unit, lin_data = get_lin_unit_and_data(raw_lin)
+
+        # 5) Array für’s Speichern
+        arr = np.vstack([
+            self.last_wavelengths,
+            self.last_power_dbm,
+            lin_data
+        ]).T
+
+        # 6) Spalten- und Einheiten-Listen
+        cols  = ["wavelength", "power_dbm", "power"]
+        units = ["nm", "dBm", lin_unit]
+
+        # 7) Metadaten bauen
+        meta = meta_daten(
+            resolution    = self.resolution.get(),
+            integration   = self.integration.get(),
+            span          = self.span.get(),
+            frequency     = freq,
+            points        = self.points.get(),
+            offset        = self.level_offset.get(),
+            reference_lvl = self.reference_lvl.get(),
+            central_wl    = self.central_wl.get(),
+            pulse_width   = pulse_width,
+            voltage       = self.voltage.get(),
+            fiberlen      = self.fiberlen.get(),
+            scan_start    = "-",
+            scan_stop     = "-",
+            scan_step     = "-",
+            instrument    = "Anritsu MS9740A",
+            notes         = "Single Sweep"
+        )
+        # Einheit für Parameter überschreiben
+        meta["param_units"]["power"] = lin_unit
+        meta["param_units"]["pulse_width"] = "ns"
+
+        # 8) Speichern
+        save_with_metadata(
+            arr         = arr,
+            columns     = cols,
+            units       = units,
+            metadata    = meta,
+            subfolder   = "Spektrum",
+            fmt         = "npy",
+            json_notes  = "Sweep Data"
+        )
+
+
+    def save_full_scan(self):
+        # Full-Scan: Metadaten frequency = "-", Scan-Parameter bleiben echt
+        if not self._scan_freqs:
+            messagebox.showwarning("No Scan","First do a scan!")
+            return
+
+        arr = np.column_stack((self._scan_freqs,
+                               self._scan_peaks,
+                               self._scan_wl))
+        cols  = ["frequency","peak","wavelength"]
+        units = ["Hz","dBm","nm"]
+        meta = meta_daten(
+            resolution    = self.resolution.get(),
+            integration   = self.integration.get(),
+            span          = self.span.get(),
+            frequency     = "-",                         # beim Scan keine Single-Freq
+            points        = self.points.get(),
+            offset        = self.level_offset.get(),
+            reference_lvl = self.reference_lvl.get(),
+            central_wl    = self.central_wl.get(),
+            voltage       = self.voltage.get(),
+            fiberlen      = self.fiberlen.get(),
+            scan_start    = self.scan_start.get(),
+            scan_stop     = self.scan_end.get(),
+            scan_step     = self.scan_step.get(),
+            instrument    = "Anritsu MS9740A",
+            notes         = f"Full scan {self.scan_start.get()}–{self.scan_end.get()} Hz"
+        )
+        save_with_metadata(
+            arr=arr,
+            columns=cols,
+            units=units,
+            metadata=meta,
+            subfolder="FreqScan",
+            fmt="npz",
+            json_notes="Full Frequency Scan"
+        )
+
+
+    # ─── Wrapper für linearen Plot speichern ─────────────────────────────────
+    def save_linear_plot(self):
+        save_linear_plot(
+            self.fig_spec,
+            resolution    = self.resolution.get(),
+            integration   = self.integration.get(),
+            span          = self.span.get(),
+            frequency     = self.curr_freq_var.get(),
+            points        = self.points.get(),
+            offset        = self.level_offset.get(),
+            reference_lvl = self.reference_lvl.get(),
+            central_wl    = self.central_wl.get(),
+            notes         = "Linear OSA Plot"
+        )
+
+    # ─── Wrapper für dBm-Plot speichern ────────────────────────────────────────
+    def save_dbm_plot(self):
+        save_dbm_plot(
+            self.fig_spec,
+            resolution    = self.resolution.get(),
+            integration   = self.integration.get(),
+            span          = self.span.get(),
+            frequency     = self.curr_freq_var.get(),
+            points        = self.points.get(),
+            offset        = self.level_offset.get(),
+            reference_lvl = self.reference_lvl.get(),
+            central_wl    = self.central_wl.get(),
+            notes         = "dBm OSA Plot"
+        )
 
     # ─── Aufräumen bei Schließen ─────────────────────────────────────────────
     def on_closing(self):
