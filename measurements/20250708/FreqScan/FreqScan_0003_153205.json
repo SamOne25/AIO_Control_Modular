@@ -1,0 +1,51 @@
+{
+  "timestamp": "2025-07-08 15:32:05.313408",
+  "resolution": "0.1",
+  "integration": "1KHZ",
+  "span": "22",
+  "frequency": "-",
+  "points": "1001",
+  "offset": "0.0",
+  "reference_lvl": "0.0",
+  "central_wl": "1550.0",
+  "voltage": "20.0",
+  "fiberlen": "~25.0",
+  "scan_start": "4111",
+  "scan_stop": "4112.5",
+  "scan_step": "0.01",
+  "instrument": "Anritsu MS9740A",
+  "notes": "Full Frequency Scan",
+  "param_units": {
+    "resolution": "nm",
+    "integration": "Hz",
+    "span": "nm",
+    "frequency": "Hz",
+    "points": "",
+    "offset": "dB",
+    "reference_lvl": "dBm",
+    "central_wl": "nm",
+    "voltage": "V",
+    "fiberlen": "km",
+    "scan_start": "Hz",
+    "scan_stop": "Hz",
+    "scan_step": "Hz"
+  },
+  "pulse_width": "100",
+  "date": "2025-07-08",
+  "time": "15:32:05",
+  "columns": [
+    "frequency",
+    "peak",
+    "wavelength"
+  ],
+  "units": {
+    "frequency": "Hz",
+    "peak": "dBm",
+    "wavelength": "nm"
+  },
+  "fields": {
+    "1": "frequency, [Hz]",
+    "2": "peak, [dBm]",
+    "3": "wavelength, [nm]"
+  }
+}

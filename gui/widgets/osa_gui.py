@@ -9,6 +9,7 @@ from matplotlib.ticker import MaxNLocator, AutoMinorLocator
 from scipy.signal import find_peaks
 import tkinter.simpledialog as simpledialog
 from controllers.osa_controller import OSAController
+import os
 
 from utils.helpers import (
     CreateToolTip,
@@ -162,6 +163,7 @@ class OSAGUI(ttk.Frame):
             ("Reference LvL [dBm]:","spin", self.reference_lvl, -90, 30),
             ("Level Offset [dB]:","spin", self.level_offset, -30, 30),
             ("Smooth:","combo", self.smooth_points, self.controller.smt_points, None),
+            ("Pulse Width [ns]:","entry", self.pulse_width,    None,    None),
         ]
         row = 0
         for idx, (txt, typ, var, opt1, opt2) in enumerate(specs):
@@ -240,9 +242,24 @@ class OSAGUI(ttk.Frame):
         row+=1
 
         # ─── Scan via Wavegen ────────────────────────────────────────────────────
+        # Parent frame for both Scan and Burst tabs
         self.scan_frame = tk.LabelFrame(param, text="Scan via Wavegen", padx=6, pady=6)
         self.scan_frame.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(10,0))
         self.scan_frame.grid_remove()
+
+        # Notebook with two tabs
+        self.scan_notebook = ttk.Notebook(self.scan_frame)
+        self.scan_notebook.grid(row=0, column=0, columnspan=4, sticky="nsew")
+
+        # --- Scan Tab ---
+        self.scan_tab = ttk.Frame(self.scan_notebook)
+        self.scan_notebook.add(self.scan_tab, text="Scan")
+
+        # --- Burst Tab ---
+        self.burst_tab = ttk.Frame(self.scan_notebook)
+        self.scan_notebook.add(self.burst_tab, text="Burst")
+        
+        # Now populate the Scan tab…
         scan_row = 0
 
         # Start / End / Step
@@ -251,22 +268,22 @@ class OSAGUI(ttk.Frame):
             ("End   Freq (Hz):", "scan_end",   "5000"),
             ("Step  (Hz):",      "scan_step",  "0.1"),
         ]:
-            tk.Label(self.scan_frame, text=label).grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
-            ent = tk.Entry(self.scan_frame, width=12)
+            tk.Label(self.scan_tab, text=label).grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
+            ent = tk.Entry(self.scan_tab, width=12)
             setattr(self, attr, ent)
             ent.insert(0, default)
             ent.grid(row=scan_row, column=1, columnspan=3, sticky="w", padx=4, pady=2)
             scan_row += 1
 
         # Current Freq
-        tk.Label(self.scan_frame, text="Current Freq (Hz):").grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
+        tk.Label(self.scan_tab, text="Current Freq (Hz):").grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
         self.curr_freq_var   = tk.DoubleVar(value=0.0)
-        self.curr_freq_entry = tk.Entry(self.scan_frame, textvariable=self.curr_freq_var, width=12)
+        self.curr_freq_entry = tk.Entry(self.scan_tab, textvariable=self.curr_freq_var, width=12)
         self.curr_freq_entry.grid(row=scan_row, column=1, columnspan=3, sticky="w", padx=4, pady=2)
         scan_row += 1
 
         # Adjust Frequency
-        self.adj_frame = tk.LabelFrame(self.scan_frame, text="Adjust Frequency", padx=5, pady=5)
+        self.adj_frame = tk.LabelFrame(self.scan_tab, text="Adjust Frequency", padx=5, pady=5)
         self.adj_frame.grid(row=scan_row, column=0, columnspan=4, sticky="ew", padx=4, pady=4)
         steps = [(-10,10),(-1,1),(-0.1,0.1),(-0.01,0.01),(-0.001,0.001)]
         for col,(neg,pos) in enumerate(steps):
@@ -282,7 +299,7 @@ class OSAGUI(ttk.Frame):
 
         # Start / Stop Scan Buttons
         self.scan_btn = tk.Button(
-            self.scan_frame,
+            self.scan_tab,
             text="Run/Pause",
             bg="green",
             fg="white",
@@ -291,7 +308,7 @@ class OSAGUI(ttk.Frame):
         self.scan_btn.grid(row=scan_row, column=0, padx=6, pady=4, sticky="w")
         
         self.stop_btn = tk.Button(
-            self.scan_frame,
+            self.scan_tab,
             text="Stop Scan",
             bg="red",
             fg="white",
@@ -300,21 +317,34 @@ class OSAGUI(ttk.Frame):
         self.stop_btn.grid(row=scan_row, column=1, padx=6, pady=4, sticky="w")
         scan_row += 1
 
+
+        # ─── Now populate the Burst tab ─────────────────────────────────────────
+        tk.Button(self.burst_tab, text="Load List",   command=self.load_scan_file)\
+            .grid(row=0, column=0, padx=6, pady=4)
+        tk.Button(self.burst_tab, text="Start list scan", command=self.start_list_scan)\
+            .grid(row=0, column=1, padx=6, pady=4)
+        btn_add = ttk.Button(self.burst_tab, text="Add Entry", command=self.add_scanlist_entry)
+        btn_add.grid(row=0, column=2, padx=6, pady=4)
+        
+        btn_rem = ttk.Button(self.burst_tab, text="Remove Selected", command=self.remove_scanlist_entry)
+        btn_rem.grid(row=0, column=3, padx=6, pady=4)
+
+
         # Peak Displays
-        tk.Label(self.scan_frame, text="Current Peak:", fg="darkgreen")\
+        tk.Label(self.scan_tab, text="Current Peak:", fg="darkgreen")\
             .grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
-        tk.Label(self.scan_frame, textvariable=self.current_peak_var, fg="darkgreen")\
+        tk.Label(self.scan_tab, textvariable=self.current_peak_var, fg="darkgreen")\
             .grid(row=scan_row, column=1, columnspan=3, sticky="w", padx=4, pady=2)
         scan_row += 1
 
-        tk.Label(self.scan_frame, text="Max Peak:", fg="darkred")\
+        tk.Label(self.scan_tab, text="Max Peak:", fg="darkred")\
             .grid(row=scan_row, column=0, sticky="e", padx=4, pady=2)
-        tk.Label(self.scan_frame, textvariable=self.max_peak_var, fg="darkred")\
+        tk.Label(self.scan_tab, textvariable=self.max_peak_var, fg="darkred")\
             .grid(row=scan_row, column=1, columnspan=3, sticky="w", padx=4, pady=2)
         scan_row += 1
 
         # Reset Max
-        tk.Button(self.scan_frame, text="Reset Max", width=10, command=self._reset_max_peak)\
+        tk.Button(self.scan_tab, text="Reset Max", width=10, command=self._reset_max_peak)\
             .grid(row=scan_row, column=0, padx=6, pady=(4,0), sticky="w")
 
         # ─── Save Frame (Data & Plots) ────────────────────────────────────────────
@@ -355,7 +385,7 @@ class OSAGUI(ttk.Frame):
         #Canvas für Scan-Plot
         
         
-# ─── Scan-Tab neu aufbauen ──────────────────────────────────────────────
+        # ─── Scan-Tab neu aufbauen ──────────────────────────────────────────────
         # Scan-Tab zum Notebook hinzufügen
         self.scan_tab = ttk.Frame(self.plot_tabs)
         self.plot_tabs.add(self.scan_tab, text="Scan")
@@ -375,6 +405,11 @@ class OSAGUI(ttk.Frame):
         # ─── Peak-Einstellungen & Export ─────────────────────────────────────────
         settings_frame = tk.Frame(self.scan_tab)
         settings_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0,4))
+        tk.Button(
+            settings_frame,
+            text="Export Peaks to Scanlist",
+            command=self.export_peaks_to_scanlist
+        ).pack(side="right", padx=4)
         
         # Min. Pegel Slider
         tk.Scale(
@@ -420,6 +455,12 @@ class OSAGUI(ttk.Frame):
             settings_frame,
             text="Save Scan (.npz/json)",
             command=self.save_full_scan
+        ).pack(side="right", padx=4)
+        # ganz unten im settings_frame, vor dem Save-Scan-Button
+        tk.Button(
+            settings_frame,
+            text="Load Scan Array",
+            command=self.load_scan_array
         ).pack(side="right", padx=4)
         
         # 2a) Filter-Eingabe
@@ -886,26 +927,21 @@ class OSAGUI(ttk.Frame):
             self.single_btn.config(state="normal")
 
     def toggle_scan_run_pause(self):
-        # falls noch nie gestartet oder nach Stop: neu starten
-        if not self.scan_running and not self.pause_event.is_set():
-            self.pause_event.clear()
-            self.scan_abort.clear()
-            self.scan_running = True
-            self.scan_btn.config(text="Run/Pause", bg="green", fg="white")
-            threading.Thread(target=self._scan_thread, daemon=True).start()
-            return
+        # if never started, kick off a fresh scan
+        if not self.scan_running and not hasattr(self, "_scan_f0"):
+            return self.start_scan()
     
-        # wenn gerade läuft → Pause
+        # existing pause / resume logic follows…
         if self.scan_running and not self.pause_event.is_set():
             self.pause_event.set()
-            self.scan_btn.config(text="Run/Paused", bg="yellow", fg="black")
+            self.scan_btn.config(text="Run/Pause", bg="yellow", fg="black")
             return
     
-        # wenn pausiert → Resume
         if self.scan_running and self.pause_event.is_set():
             self.pause_event.clear()
             self.scan_btn.config(text="Run/Pause", bg="green", fg="white")
             return
+
 
     # ─── Scan mit Wavegen ─────────────────────────────────────────────────────
     def start_scan(self):
@@ -1362,6 +1398,7 @@ class OSAGUI(ttk.Frame):
             offset        = self.level_offset.get(),
             reference_lvl = self.reference_lvl.get(),
             central_wl    = self.central_wl.get(),
+            pulse_width   = self.pulse_width.get(),
             voltage       = self.voltage.get(),
             fiberlen      = self.fiberlen.get(),
             scan_start    = self.scan_start.get(),
@@ -1379,6 +1416,309 @@ class OSAGUI(ttk.Frame):
             fmt="npz",
             json_notes="Full Frequency Scan"
         )
+        
+    def load_scan_array(self):
+        """
+        Lädt ein gespeichertes Scan-Array und aktualisiert Scan-Tab Table + Plot.
+        Erwartet mind. 3 Spalten: freq, peak, wavelength.
+        """
+        path = filedialog.askopenfilename(
+            title="Load Scan Array",
+            filetypes=[
+                ("NumPy array", "*.npy;*.npz"),
+                ("CSV/Text",   "*.csv;*.txt"),
+                ("All files",  "*.*")
+            ]
+        )
+        if not path:
+            return
+    
+        # --- Datei einlesen ---
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == ".npy":
+                data = np.load(path)
+            elif ext == ".npz":
+                npz = np.load(path)
+                data = npz[npz.files[0]]
+            else:
+                try:
+                    data = np.loadtxt(path, delimiter=",")
+                except:
+                    data = np.loadtxt(path, delimiter=None)
+        except Exception as e:
+            messagebox.showerror("Load error", f"Konnte nicht laden:\n{e}")
+            return
+    
+        # --- Validierung & Trimmen ---
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        if data.shape[1] < 2:
+            messagebox.showerror("Format error",
+                "Array braucht mind. 2 Spalten: freq und peak")
+            return
+        data = data[:, :3]  # nur 3 Spalten maximal
+    
+        # --- In interne Lists speichern ---
+        freqs = data[:, 0]
+        peaks = data[:, 1]
+        wls   = data[:, 2] if data.shape[1] >= 3 else np.zeros_like(freqs)
+    
+        self._scan_freqs = freqs.tolist()
+        self._scan_peaks = peaks.tolist()
+        self._scan_wl    = wls.tolist()
+        self.status_var.set(f"{len(self._scan_freqs)} Punkte geladen")
+    
+        # --- Achsengrenzen in den Eingabefeldern setzen ---
+        fmin, fmax = freqs.min(), freqs.max()
+        self.scan_start.delete(0, tk.END)
+        self.scan_start.insert(0, f"{fmin:.3f}")
+        self.scan_end  .delete(0, tk.END)
+        self.scan_end  .insert(0, f"{fmax:.3f}")
+    
+        # --- Tabelle & Plot aktualisieren ---
+        self._refresh_scan_table()
+        self.update_scan_plot()
+
+
+    # ─── Burst Methoden ─────────────────────────────────
+    def add_scanlist_entry(self):
+        """Fügt einen leeren Eintrag ans Ende der Burst-Liste hinzu und startet Inline-Edit."""
+        # stelle sicher, dass Treeview existiert
+        if not hasattr(self, "burst_tree"):
+            return
+        # Leerer Datensatz: freq=0, peak=0, wl=0
+        iid = self.burst_tree.insert("", "end", values=("", "", ""))
+        # direkt Inline-Edit starten (wir nehmen hier freq-Spalte):
+        self.burst_tree.focus(iid)
+        self.burst_tree.selection_set(iid)
+        # wir starten Edit per Doppel-Klick-Handler (siehe unten)
+    
+    def remove_scanlist_entry(self):
+        """Entfernt den aktuell selektierten Eintrag aus der Burst-Liste."""
+        sel = self.burst_tree.selection()
+        if not sel:
+            messagebox.showinfo("Keine Auswahl", "Bitte zuerst eine Zeile auswählen.")
+            return
+        for iid in sel:
+            self.burst_tree.delete(iid)
+        # auch interne Liste aktualisieren, falls Du sie benutzt:
+        try:
+            self.scan_list = [float(self.burst_tree.set(row, "Frequenz (Hz)")) 
+                              for row in self.burst_tree.get_children()]
+        except:
+            pass
+        
+        
+ 
+    def export_peaks_to_scanlist(self):
+        """
+        Ermittelt die aktuell im Scan-Tab detektierten Peaks und
+        übernimmt sie in die Liste des Burst-Tabs, als wäre sie geladen.
+        """
+        # 1) Peaks neu detektieren
+        self._detect_peaks()
+        idx = self.peaks_idx
+        if len(idx) == 0:
+            messagebox.showinfo("Keine Peaks", "Keine Peaks zum Exportieren gefunden.")
+            return
+    
+        # 2) Array aus freq, peak, wl bauen
+        freqs = np.array(self._scan_freqs)[idx]
+        peaks = np.array(self._scan_peaks)[idx]
+        wls   = np.array(self._scan_wl)[idx]
+        arr   = np.column_stack((freqs, peaks, wls))
+    
+        # 3) in Burst-Listen übernehmen
+        self.scan_array = arr
+        self.scan_list  = arr[:, 0]
+        self.status_var.set(f"{len(self.scan_list)} Peaks exportiert")
+    
+        # 4) Burst-Tab sichtbar machen und auswählen
+        if not self.scan_frame.winfo_ismapped():
+            self.scan_frame.grid()
+        self.scan_notebook.select(self.burst_tab)
+    
+        # 5) Treeview neu befüllen (erst erstellen, falls nötig)
+        labels_full = ["Frequenz (Hz)", "Peak", "Wellenlänge"]
+        n_cols = arr.shape[1]
+        cols   = labels_full[:n_cols]
+    
+        if not hasattr(self, "burst_tree"):
+            # einmalige Erzeugung
+            self.burst_tree = ttk.Treeview(
+                self.burst_tab, columns=cols, show="headings", height=6
+            )
+            vsb = ttk.Scrollbar(
+                self.burst_tab, orient="vertical", command=self.burst_tree.yview
+            )
+            self.burst_tree.configure(yscrollcommand=vsb.set)
+    
+            self.burst_tab.grid_rowconfigure(1, weight=1)
+            self.burst_tab.grid_columnconfigure(0, weight=1)
+    
+            for col in cols:
+                self.burst_tree.heading(col, text=col)
+                self.burst_tree.column(col, width=100, anchor="center")
+    
+            self.burst_tree.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
+            vsb.grid(row=1, column=1, sticky="ns", padx=(0,6), pady=4)
+        else:
+            # alte Einträge löschen
+            for iid in self.burst_tree.get_children():
+                self.burst_tree.delete(iid)
+    
+        # 6) Daten einfügen
+        for row in arr:
+            self.burst_tree.insert("", "end", values=tuple(row[:n_cols]))
+    def on_burst_double_click(self, event):
+        col = self.burst_tree.identify_column(event.x)
+        row = self.burst_tree.identify_row(event.y)
+        if not row or not col:
+            return
+        x, y, w, h = self.burst_tree.bbox(row, col)
+        val = self.burst_tree.set(row, col)
+        entry = tk.Entry(self.burst_tab)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.insert(0, val)
+        entry.focus()
+        def on_enter(e):
+            self.burst_tree.set(row, col, entry.get())
+            entry.destroy()
+        entry.bind("<Return>", on_enter)
+        entry.bind("<FocusOut>", lambda e: entry.destroy())
+        
+    def load_scan_file(self):
+        """
+        Lädt eine Scan-Datei mit 1–3 Spalten:
+          1) Frequenz (Hz)
+          2) optional Peak
+          3) optional Wellenlänge
+    
+        – sorgt dafür, dass der Scan-Frame sichtbar ist
+        – wechselt in den Burst-Tab
+        – benutzt numpy.load für .npy/.npz und np.loadtxt für .csv/.txt
+        – zeigt die Tabelle unter den Load/Start-Buttons
+        """
+        # 0) Frame & Tab sichtbar machen
+        if not self.scan_frame.winfo_ismapped():
+            self.scan_frame.grid()
+        self.scan_notebook.select(self.burst_tab)
+    
+        # 1) Datei öffnen
+        path = filedialog.askopenfilename(
+            title="Scan-Liste öffnen",
+            filetypes=[
+                ("NumPy Array","*.npy;*.npz"),
+                ("CSV/Text","*.csv;*.txt"),
+                ("Alle Dateien","*.*")
+            ]
+        )
+        if not path:
+            return
+    
+        # 2) Daten einlesen je nach Dateiendung
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext in (".npy",):
+                data = np.load(path)
+            elif ext in (".npz",):
+                npz = np.load(path)
+                # erstes Array in der .npz laden
+                data = npz[npz.files[0]]
+            else:
+                try:
+                    data = np.loadtxt(path, delimiter=",")
+                except Exception:
+                    data = np.loadtxt(path, delimiter=None)
+        except Exception as e:
+            messagebox.showerror("Ladefehler", f"Konnte Datei nicht laden:\n{e}")
+            return
+    
+        # 3) Sicherstellen, dass es ein 2D-Array ist
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+    
+        # 4) Nur bis zu 3 Spalten verwenden
+        if data.shape[1] > 3:
+            data = data[:, :3]
+    
+        # 5) Dynamische Spaltenüberschriften
+        labels_full = ["Frequenz (Hz)", "Peak", "Wellenlänge"]
+        n_cols = data.shape[1]
+        cols   = labels_full[:n_cols]
+    
+        # 6) Für den Burst speichern
+        self.scan_array = data
+        self.scan_list  = data[:, 0]
+        self.status_var.set(f"{data.shape[0]} Zeile(n) geladen, {n_cols} Spalte(n)")
+    
+        # 7) Treeview + Scrollbar anlegen oder neu befüllen
+        if not hasattr(self, "burst_tree"):
+            # einmalige Erzeugung
+            self.burst_tree = ttk.Treeview(
+                self.burst_tab, columns=cols, show="headings", height=6
+            )
+            vsb = ttk.Scrollbar(
+                self.burst_tab, orient="vertical", command=self.burst_tree.yview
+            )
+            self.burst_tree.configure(yscrollcommand=vsb.set)
+        
+            # Grid-Gewichte, damit die Tabelle wächst
+            self.burst_tab.grid_rowconfigure(1, weight=1)
+            self.burst_tab.grid_columnconfigure(0, weight=1)
+        
+            # Spaltenüberschriften
+            for col in cols:
+                self.burst_tree.heading(col, text=col)
+                self.burst_tree.column(col, width=100, anchor="center")
+        
+            self.burst_tree.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
+            vsb.grid(row=1, column=1, sticky="ns", padx=(0,6), pady=4)
+            self.burst_tree.bind("<Double-1>", on_burst_double_click)
+
+        # 8) Neue Daten in die Treeview einfügen
+        for row in data:
+            self.burst_tree.insert("", "end", values=tuple(row[:n_cols]))
+
+
+    def start_list_scan(self):
+        if not getattr(self, "scan_list", None):
+            messagebox.showwarning("No list", "Please load a scan-list first")
+            return
+    
+        freqs = self.scan_list
+        n     = len(freqs)
+        dwell = 1.0 / n
+        append_event(self.event_log, self.log_text, "INFO", "Calculated list parameters")
+    
+        # 1) Enter List mode
+        self.wavegen_controller.write("SOURce1:FREQuency:MODE LIST")
+        append_event(self.event_log, self.log_text, "SEND", "SOURce1:FREQuency:MODE LIST")
+    
+        # 2) Download frequencies
+        cmd = "SOURce1:LIST:FREQuency " + ",".join(str(f) for f in freqs)
+        self.wavegen_controller.write(cmd)
+        append_event(self.event_log, self.log_text, "SEND", cmd)
+    
+        # 3) Set dwell time per step
+        cmd = f"SOURce1:LIST:DWELL {dwell}"
+        self.wavegen_controller.write(cmd)
+        append_event(self.event_log, self.log_text, "SEND", cmd)
+    
+        # 4) Use internal trigger to step automatically
+        self.wavegen_controller.write("TRIGger:SOURce IMMediate")
+        append_event(self.event_log, self.log_text, "SEND", "TRIGger:SOURce IMMediate")
+    
+        # 5) Arm and start the list
+        self.wavegen_controller.write("INITiate")
+        append_event(self.event_log, self.log_text, "SEND", "INITiate")
+    
+        # 6) Update GUI status
+        self.status_var.set(f"List scan started: {n} frequencies, dwell={dwell:.3f}s")
+        append_event(self.event_log, self.log_text, "INFO", "List scan started")
+
+
 
 
     # ─── Wrapper für linearen Plot speichern ─────────────────────────────────
